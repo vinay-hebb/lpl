@@ -1,0 +1,27 @@
+name: Deploy Hugging Face Space
+
+on:
+  push:
+
+jobs:
+  mirror-to-space:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO }}
+        run: |
+          if [ -z "${HF_TOKEN}" ] || [ -z "${HF_SPACE_REPO}" ]; then
+            echo "HF_TOKEN and HF_SPACE_REPO must be configured as GitHub secrets."
+            exit 1
+          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add hf "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_REPO}"
+          git push --force hf HEAD:main
