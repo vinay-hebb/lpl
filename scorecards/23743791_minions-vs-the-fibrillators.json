@@ -1,0 +1,79 @@
+{
+  "match_id": 23743791,
+  "match_title": "Minions vs The Fibrillators",
+  "tournament_name": "LifeSignals Premier League, 2026",
+  "scorecard_url": "https://cricheroes.com/scorecard/23743791/lifesignals-premier-league,-2026/minions-vs-the-fibrillators/scorecard",
+  "result": "Minions won by 38 runs",
+  "innings": [
+    {
+      "teamName": "Minions",
+      "inning": 1,
+      "total_run": 72,
+      "total_wicket": 10,
+      "total_extra": 21,
+      "overs_played": "11.0",
+      "extras": {
+        "total": 21,
+        "summary": "(wd 19, nb 2)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 15,
+            "extra_run": 4
+          },
+          {
+            "extra_type_id": 2,
+            "type_code": "NB",
+            "type": "",
+            "extra_type_run": 2,
+            "extra_run": 0
+          }
+        ]
+      }
+    },
+    {
+      "teamName": "The Fibrillators",
+      "inning": 2,
+      "total_run": 34,
+      "total_wicket": 10,
+      "total_extra": 13,
+      "overs_played": "10.1",
+      "extras": {
+        "total": 13,
+        "summary": "(nb 1, wd 7, b 4, lb 1)",
+        "data": [
+          {
+            "extra_type_id": 2,
+            "type_code": "NB",
+            "type": "",
+            "extra_type_run": 1,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 7,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 4,
+            "type_code": "B",
+            "type": "",
+            "extra_type_run": 0,
+            "extra_run": 4
+          },
+          {
+            "extra_type_id": 3,
+            "type_code": "LB",
+            "type": "",
+            "extra_type_run": 0,
+            "extra_run": 1
+          }
+        ]
+      }
+    }
+  ]
+}

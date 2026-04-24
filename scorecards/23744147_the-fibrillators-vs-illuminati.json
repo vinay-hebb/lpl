@@ -1,0 +1,65 @@
+{
+  "match_id": 23744147,
+  "match_title": "The Fibrillators vs Illuminati",
+  "tournament_name": "LifeSignals Premier League, 2026",
+  "scorecard_url": "https://cricheroes.com/scorecard/23744147/lifesignals-premier-league,-2026/the-fibrillators-vs-illuminati/scorecard",
+  "result": "Illuminati won by 6 wickets",
+  "innings": [
+    {
+      "teamName": "The Fibrillators",
+      "inning": 1,
+      "total_run": 67,
+      "total_wicket": 5,
+      "total_extra": 11,
+      "overs_played": "13.0",
+      "extras": {
+        "total": 11,
+        "summary": "(wd 10, b 1)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 10,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 4,
+            "type_code": "B",
+            "type": "",
+            "extra_type_run": 0,
+            "extra_run": 1
+          }
+        ]
+      }
+    },
+    {
+      "teamName": "Illuminati",
+      "inning": 2,
+      "total_run": 70,
+      "total_wicket": 4,
+      "total_extra": 15,
+      "overs_played": "12.1",
+      "extras": {
+        "total": 15,
+        "summary": "(wd 11, b 4)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 11,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 4,
+            "type_code": "B",
+            "type": "",
+            "extra_type_run": 0,
+            "extra_run": 4
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "match_id": 23743907,
+  "match_title": "Illuminati vs Minions",
+  "tournament_name": "LifeSignals Premier League, 2026",
+  "scorecard_url": "https://cricheroes.com/scorecard/23743907/lifesignals-premier-league,-2026/illuminati-vs-minions/scorecard",
+  "result": "Minions won by 8 wickets",
+  "innings": [
+    {
+      "teamName": "Illuminati",
+      "inning": 1,
+      "total_run": 47,
+      "total_wicket": 10,
+      "total_extra": 13,
+      "overs_played": "11.4",
+      "extras": {
+        "total": 13,
+        "summary": "(nb 2, lb 4, wd 7)",
+        "data": [
+          {
+            "extra_type_id": 2,
+            "type_code": "NB",
+            "type": "",
+            "extra_type_run": 2,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 3,
+            "type_code": "LB",
+            "type": "",
+            "extra_type_run": 0,
+            "extra_run": 4
+          },
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 7,
+            "extra_run": 0
+          }
+        ]
+      }
+    },
+    {
+      "teamName": "Minions",
+      "inning": 2,
+      "total_run": 48,
+      "total_wicket": 2,
+      "total_extra": 14,
+      "overs_played": "8.4",
+      "extras": {
+        "total": 14,
+        "summary": "(wd 14)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 10,
+            "extra_run": 4
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "match_id": 23744132,
+  "match_title": "Minions vs Akatsuki Corps",
+  "tournament_name": "LifeSignals Premier League, 2026",
+  "scorecard_url": "https://cricheroes.com/scorecard/23744132/lifesignals-premier-league,-2026/minions-vs-akatsuki-corps/scorecard",
+  "result": "Akatsuki Corps won by 8 wickets",
+  "innings": [
+    {
+      "teamName": "Minions",
+      "inning": 1,
+      "total_run": 76,
+      "total_wicket": 6,
+      "total_extra": 10,
+      "overs_played": "13.0",
+      "extras": {
+        "total": 10,
+        "summary": "(wd 8, nb 2)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 4,
+            "extra_run": 4
+          },
+          {
+            "extra_type_id": 2,
+            "type_code": "NB",
+            "type": "",
+            "extra_type_run": 2,
+            "extra_run": 0
+          }
+        ]
+      }
+    },
+    {
+      "teamName": "Akatsuki Corps",
+      "inning": 2,
+      "total_run": 78,
+      "total_wicket": 2,
+      "total_extra": 19,
+      "overs_played": "10.0",
+      "extras": {
+        "total": 19,
+        "summary": "(wd 14, nb 4, b 1)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 14,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 2,
+            "type_code": "NB",
+            "type": "",
+            "extra_type_run": 4,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 4,
+            "type_code": "B",
+            "type": "",
+            "extra_type_run": 0,
+            "extra_run": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "match_id": 23743940,
+  "match_title": "Akatsuki Corps vs The Fibrillators",
+  "tournament_name": "LifeSignals Premier League, 2026",
+  "scorecard_url": "https://cricheroes.com/scorecard/23743940/lifesignals-premier-league,-2026/akatsuki-corps-vs-the-fibrillators/scorecard",
+  "result": "Akatsuki Corps won by 43 runs",
+  "innings": [
+    {
+      "teamName": "Akatsuki Corps",
+      "inning": 1,
+      "total_run": 73,
+      "total_wicket": 7,
+      "total_extra": 14,
+      "overs_played": "13.0",
+      "extras": {
+        "total": 14,
+        "summary": "(wd 14)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 13,
+            "extra_run": 1
+          }
+        ]
+      }
+    },
+    {
+      "teamName": "The Fibrillators",
+      "inning": 2,
+      "total_run": 30,
+      "total_wicket": 10,
+      "total_extra": 7,
+      "overs_played": "8.5",
+      "extras": {
+        "total": 7,
+        "summary": "(lb 2, wd 4, nb 1)",
+        "data": [
+          {
+            "extra_type_id": 3,
+            "type_code": "LB",
+            "type": "",
+            "extra_type_run": 0,
+            "extra_run": 2
+          },
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 4,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 2,
+            "type_code": "NB",
+            "type": "",
+            "extra_type_run": 1,
+            "extra_run": 0
+          }
+        ]
+      }
+    }
+  ]
+}

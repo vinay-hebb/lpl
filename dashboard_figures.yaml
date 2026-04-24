@@ -1,0 +1,14 @@
+figures:
+  team_extras_total_stack: true
+  team_extras_bar: true
+  bowler_discipline_scatter: true
+  over_heatmap: true
+  boundary_dependency_bar: true
+  boundary_runs_stack: true
+  dropped_catches_team_bar: true
+  bowler_summary_table: true
+  boundary_dependency_table: true
+  dropped_catches_table: true
+  points_table_table: true
+  top_batting_table: true
+  top_bowling_table: true
