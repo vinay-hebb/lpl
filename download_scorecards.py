@@ -48,6 +48,18 @@ def read_cached_text(path: Path) -> str | None:
     return path.read_text(encoding="utf-8")
 
 
+def fetch_text_with_cache(url: str, cache_path: Path) -> str:
+    try:
+        text = fetch_text(url)
+    except (HTTPError, URLError, TimeoutError):
+        cached_text = read_cached_text(cache_path)
+        if cached_text is not None:
+            return cached_text
+        raise
+    cache_path.write_text(text, encoding="utf-8")
+    return text
+
+
 def extract_next_data(html_text: str) -> dict:
     match = NEXT_DATA_RE.search(html_text)
     if match is None:
@@ -101,15 +113,12 @@ def download_points_table(tournament_id: str, tournament_slug: str, output_dir: 
     )
     html_path = output_dir / "tournament_points_table.html"
     json_path = output_dir / "tournament_points_table.json"
-    if html_path.exists() and json_path.exists():
-        return
 
-    html_text = fetch_text(points_url)
+    html_text = fetch_text_with_cache(points_url, html_path)
     payload = extract_next_data(html_text)
     details = payload["props"]["pageProps"]["tournamentDetails"]["data"]
     standings = json.loads(details.get("standing_data", "[]"))
 
-    html_path.write_text(html_text, encoding="utf-8")
     json_path.write_text(
         json.dumps(
             {
@@ -131,15 +140,10 @@ def download_scorecards(tournament_url: str, output_dir: Path) -> int:
     past_matches_html_path = output_dir / "past_matches.html"
     past_matches_json_path = output_dir / "past_matches.json"
 
-    tournament_html = read_cached_text(past_matches_html_path)
-    if tournament_html is None:
-        tournament_html = fetch_text(tournament_url)
-        past_matches_html_path.write_text(tournament_html, encoding="utf-8")
-
+    tournament_html = fetch_text_with_cache(tournament_url, past_matches_html_path)
     tournament_payload = extract_next_data(tournament_html)
     matches = tournament_payload["props"]["pageProps"]["matchResponse"]["data"]
-    if not past_matches_json_path.exists():
-        past_matches_json_path.write_text(json.dumps(matches, indent=2), encoding="utf-8")
+    past_matches_json_path.write_text(json.dumps(matches, indent=2), encoding="utf-8")
 
     download_points_table(tournament_id, tournament_slug, output_dir)
 

@@ -1,0 +1,65 @@
+{
+  "match_id": 23744170,
+  "match_title": "Illuminati vs Akatsuki Corps",
+  "tournament_name": "LifeSignals Premier League, 2026",
+  "scorecard_url": "https://cricheroes.com/scorecard/23744170/lifesignals-premier-league,-2026/illuminati-vs-akatsuki-corps/scorecard",
+  "result": "Akatsuki Corps won by 4 wickets",
+  "innings": [
+    {
+      "teamName": "Illuminati",
+      "inning": 1,
+      "total_run": 83,
+      "total_wicket": 6,
+      "total_extra": 7,
+      "overs_played": "13.0",
+      "extras": {
+        "total": 7,
+        "summary": "(wd 6, nb 1)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 6,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 2,
+            "type_code": "NB",
+            "type": "",
+            "extra_type_run": 1,
+            "extra_run": 0
+          }
+        ]
+      }
+    },
+    {
+      "teamName": "Akatsuki Corps",
+      "inning": 2,
+      "total_run": 85,
+      "total_wicket": 6,
+      "total_extra": 12,
+      "overs_played": "12.1",
+      "extras": {
+        "total": 12,
+        "summary": "(wd 11, b 1)",
+        "data": [
+          {
+            "extra_type_id": 1,
+            "type_code": "WD",
+            "type": "",
+            "extra_type_run": 11,
+            "extra_run": 0
+          },
+          {
+            "extra_type_id": 4,
+            "type_code": "B",
+            "type": "",
+            "extra_type_run": 0,
+            "extra_run": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -187,19 +187,24 @@ def parse_detail(detail: str) -> dict[str, str]:
     boundary_type = ""
     is_wicket = "0"
     dismissal_kind = ""
+    has_no_ball = "no ball" in lowered
+    has_leg_bye = "leg bye" in lowered
+    has_bye = "bye" in lowered
 
-    if "wide" in lowered:
+    detail_segments = [segment.strip(" ()") for segment in lowered.split(",")]
+
+    if any(segment == "wide" for segment in detail_segments):
         extra_type = "wide"
         total_runs = "1"
         batsman_runs = "0"
-    elif "leg bye" in lowered:
-        extra_type = "leg_bye"
-    elif "bye" in lowered:
-        extra_type = "bye"
-    elif "no ball" in lowered:
+    elif has_no_ball:
         extra_type = "no_ball"
         total_runs = "1"
         batsman_runs = "0"
+    elif has_leg_bye:
+        extra_type = "leg_bye"
+    elif has_bye:
+        extra_type = "bye"
 
     if "four" in lowered:
         is_boundary = "1"
@@ -217,14 +222,21 @@ def parse_detail(detail: str) -> dict[str, str]:
 
     runs_match = RUNS_RE.search(detail)
     if runs_match:
-        parsed_runs = runs_match.group(1)
-        total_runs = parsed_runs
-        if extra_type in {"bye", "leg_bye", "wide"}:
+        parsed_runs = int(runs_match.group(1))
+        if extra_type == "wide":
+            total_runs = str(parsed_runs + 1)
             batsman_runs = "0"
-        elif extra_type == "no_ball" and parsed_runs == "1":
+        elif extra_type == "no_ball":
+            total_runs = str(parsed_runs + 1)
+            batsman_runs = "0"
+        else:
+            total_runs = str(parsed_runs)
+        if extra_type in {"bye", "leg_bye"}:
+            batsman_runs = "0"
+        elif extra_type == "no_ball" and parsed_runs >= 1:
             batsman_runs = "0"
         elif not batsman_runs:
-            batsman_runs = parsed_runs
+            batsman_runs = str(parsed_runs)
 
     if "no run" in lowered and not total_runs:
         total_runs = "0"
@@ -256,9 +268,16 @@ def parse_detail(detail: str) -> dict[str, str]:
     }
 
 
+def should_ignore_detail(detail: str) -> bool:
+    lowered = detail.lower()
+    return "retired hurt" in lowered or "retired out" in lowered
+
+
 def enrich_rows(rows: list[dict[str, str]], batting_team: str) -> list[dict[str, str]]:
     enriched: list[dict[str, str]] = []
     for row in rows:
+        if should_ignore_detail(row["detail"]):
+            continue
         over_str, ball_in_over = row["ball"].split(".")
         detail_fields = parse_detail(row["detail"])
         enriched.append(
