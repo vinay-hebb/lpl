@@ -19,6 +19,9 @@ from commentary_common import parse_match_csv_metadata
 
 
 DROP_RE = re.compile(r"dropped by\s+(?P<fielder>[^,#]+)", re.IGNORECASE)
+APP_VERSION = "0.2.0"
+LAST_UPDATED = "2026-04-25 12:08 IST"
+VERSION_LOG_HREF = "/assets/version_log.md"
 
 
 def parse_args() -> argparse.Namespace:
@@ -142,6 +145,7 @@ def load_points_table(points_table_path: Path) -> pd.DataFrame:
 def load_figure_config(config_path: Path) -> dict[str, bool]:
     default_config = {
         "team_extras_total_stack": True,
+        "team_extras_type_stack": True,
         "team_extras_bar": True,
         "bowler_discipline_scatter": True,
         "over_heatmap": True,
@@ -405,7 +409,14 @@ def empty_figure(title: str) -> go.Figure:
     return figure
 
 
-def table_figure(header_values: list[str], cell_values: list[pd.Series], title: str) -> go.Figure:
+def table_figure(
+    header_values: list[str], cell_values: list[pd.Series], title: str, *, max_rows: int | None = None
+) -> go.Figure:
+    row_count = max((len(values) for values in cell_values), default=0)
+    if max_rows is not None:
+        row_count = min(row_count, max_rows)
+    table_height = 72 + 26 * row_count
+    figure_height = max(140, min(320, table_height + 60))
     figure = go.Figure(
         data=[
             go.Table(
@@ -414,7 +425,11 @@ def table_figure(header_values: list[str], cell_values: list[pd.Series], title: 
             )
         ]
     )
-    figure.update_layout(title=title, height=240, margin={"t": 40, "b": 10, "l": 10, "r": 10})
+    figure.update_layout(
+        title=title,
+        height=figure_height,
+        margin={"t": 40, "b": 10, "l": 10, "r": 10},
+    )
     return figure
 
 
@@ -425,6 +440,18 @@ def clean_facet_annotations(figure: go.Figure) -> go.Figure:
         )
     )
     return figure
+
+
+def ordered_match_labels(df: pd.DataFrame) -> list[str]:
+    if df.empty:
+        return []
+    ordered = (
+        df[["match_date", "match_label"]]
+        .dropna()
+        .drop_duplicates()
+        .sort_values(["match_date", "match_label"])
+    )
+    return ordered["match_label"].tolist()
 
 
 def build_points_table_components(
@@ -525,6 +552,14 @@ def build_app(
             ),
             html.Div(
                 [
+                    html.Span(f"Version: {APP_VERSION}", style={"marginRight": "16px"}),
+                    html.Span(f"Last updated: {LAST_UPDATED}", style={"marginRight": "16px"}),
+                    html.A("Version log", href=VERSION_LOG_HREF, target="_blank"),
+                ],
+                style={"marginBottom": "16px"},
+            ),
+            html.Div(
+                [
                     html.Label("Match"),
                     dcc.Dropdown(
                         id="match-filter",
@@ -545,6 +580,10 @@ def build_app(
                                     html.Div(
                                         dcc.Graph(id="team-extras-total-stack"),
                                         style=component_style(figure_config["team_extras_total_stack"]),
+                                    ),
+                                    html.Div(
+                                        dcc.Graph(id="team-extras-type-stack"),
+                                        style=component_style(figure_config["team_extras_type_stack"]),
                                     ),
                                     html.Div(
                                         dcc.Graph(id="team-extras-bar"),
@@ -621,6 +660,7 @@ def build_app(
     @app.callback(
         Output("team-extras-bar", "figure"),
         Output("team-extras-total-stack", "figure"),
+        Output("team-extras-type-stack", "figure"),
         Output("bowler-discipline-scatter", "figure"),
         Output("over-heatmap", "figure"),
         Output("bowler-summary-table", "figure"),
@@ -633,12 +673,13 @@ def build_app(
     )
     def update_figures(
         match_value: str,
-    ) -> tuple[go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure]:
+    ) -> tuple[go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure]:
         if df.empty:
             empty = empty_figure("No commentary CSVs found")
-            return (empty, empty, empty, empty, empty, empty, empty, empty, empty, empty)
+            return (empty, empty, empty, empty, empty, empty, empty, empty, empty, empty, empty)
 
         filtered = df if match_value == "ALL" else df[df["match_key"] == match_value]
+        match_label_order = ordered_match_labels(filtered)
 
         team_summary = aggregate_team_summary(filtered)
         bowler_summary = aggregate_bowler_summary(filtered)
@@ -660,6 +701,7 @@ def build_app(
             "barmode": "stack",
             "hover_data": ["match_label"],
             "title": "Extra Runs Conceded by Bowling Team",
+            "category_orders": {"match_label": match_label_order},
         }
         if match_value == "ALL":
             team_fig_kwargs["facet_col"] = "match_label"
@@ -686,6 +728,32 @@ def build_app(
             legend_title_text="Match",
         )
 
+        team_type_stack = (
+            team_summary.groupby("bowling_team", as_index=False)[
+                ["wide_runs", "no_ball_runs", "bye_runs", "leg_bye_runs"]
+            ]
+            .sum()
+            .melt(
+                id_vars=["bowling_team"],
+                value_vars=["wide_runs", "no_ball_runs", "bye_runs", "leg_bye_runs"],
+                var_name="extra_type",
+                value_name="runs",
+            )
+        )
+        team_type_stack_fig = px.bar(
+            team_type_stack,
+            x="bowling_team",
+            y="runs",
+            color="extra_type",
+            barmode="stack",
+            title="Total Extras by Team with Extra Type Contribution",
+        )
+        team_type_stack_fig.update_layout(
+            xaxis_title="Bowling team",
+            yaxis_title="Total extras",
+            legend_title_text="Extra type",
+        )
+
         scatter_fig = px.scatter(
             bowler_summary,
             x="overs_bowled",
@@ -695,6 +763,7 @@ def build_app(
             hover_data=[
                 "match_title",
                 "match_label",
+                "bowler",
                 "wide_runs",
                 "no_ball_runs",
                 "bye_runs",
@@ -704,7 +773,10 @@ def build_app(
             ],
             title="Bowler Extras Discipline: Volume vs Rate",
         )
-        scatter_fig.update_layout(xaxis_title="Overs bowled", yaxis_title="Extras per over")
+        scatter_fig.update_layout(
+            xaxis_title="Overs bowled in that match",
+            yaxis_title="Extras per over in that match",
+        )
 
         if over_summary.empty:
             heatmap_fig = empty_figure("")
@@ -719,6 +791,7 @@ def build_app(
                 facet_col="match_label" if match_value == "ALL" else None,
                 facet_col_wrap=match_count if match_value == "ALL" else 0,
                 color_continuous_scale="Reds",
+                category_orders={"match_label": match_label_order},
             )
         heatmap_fig.update_layout(title=None)
         clean_facet_annotations(heatmap_fig)
@@ -774,6 +847,7 @@ def build_app(
             color="run_source",
             facet_col="match_label" if match_value == "ALL" else None,
             title="Innings Run Mix: Boundaries vs Running vs Extras",
+            category_orders={"match_label": match_label_order},
         )
         boundary_mix_fig.update_layout(legend_title_text="Run source")
         clean_facet_annotations(boundary_mix_fig)
@@ -820,6 +894,7 @@ def build_app(
         return (
             team_fig,
             team_total_stack_fig,
+            team_type_stack_fig,
             scatter_fig,
             heatmap_fig,
             table_fig,
