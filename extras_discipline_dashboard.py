@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1", help="Dash host")
     parser.add_argument("--port", type=int, default=8050, help="Dash port")
+    parser.add_argument(
+        "--no-reload",
+        action="store_true",
+        help="Disable Dash hot reload during development",
+    )
     return parser.parse_args()
 
 
@@ -145,11 +150,11 @@ def load_points_table(points_table_path: Path) -> pd.DataFrame:
 def load_figure_config(config_path: Path) -> dict[str, bool]:
     default_config = {
         "team_extras_total_stack": True,
+        "team_keeper_byes_efficiency_bar": True,
         "team_extras_type_stack": True,
         "team_extras_bar": True,
         "bowler_discipline_scatter": True,
         "over_heatmap": True,
-        "boundary_dependency_bar": True,
         "boundary_runs_stack": True,
         "dropped_catches_team_bar": True,
         "bowler_summary_table": True,
@@ -400,6 +405,14 @@ def aggregate_bowling_leaders(df: pd.DataFrame) -> pd.DataFrame:
         lambda row: row["runs_conceded"] / row["overs_bowled"] if row["overs_bowled"] > 0 else 0.0,
         axis=1,
     )
+    grouped["bowling_strike_rate"] = grouped.apply(
+        lambda row: row["legal_balls"] / row["wickets"] if row["wickets"] > 0 else None,
+        axis=1,
+    )
+    grouped["bowling_average"] = grouped.apply(
+        lambda row: row["runs_conceded"] / row["wickets"] if row["wickets"] > 0 else None,
+        axis=1,
+    )
     return grouped.sort_values(["wickets", "economy", "runs_conceded"], ascending=[False, True, True]).head(5)
 
 
@@ -454,6 +467,33 @@ def ordered_match_labels(df: pd.DataFrame) -> list[str]:
     return ordered["match_label"].tolist()
 
 
+def ordered_over_labels(df: pd.DataFrame) -> list[str]:
+    if df.empty:
+        return []
+    ordered = (
+        df[["over_number", "over_label"]]
+        .dropna()
+        .drop_duplicates()
+        .sort_values(["over_number", "over_label"])
+    )
+    return ordered["over_label"].tolist()
+
+
+def ordered_team_labels(df: pd.DataFrame) -> list[str]:
+    if df.empty:
+        return []
+    teams = pd.concat(
+        [
+            df.get("team_1", pd.Series(dtype=str)),
+            df.get("team_2", pd.Series(dtype=str)),
+            df.get("batting_team", pd.Series(dtype=str)),
+            df.get("bowling_team", pd.Series(dtype=str)),
+        ],
+        ignore_index=True,
+    )
+    return sorted(team for team in teams.dropna().astype(str).unique().tolist() if team and team != "Unknown")
+
+
 def build_points_table_components(
     points_df: pd.DataFrame, commentary_df: pd.DataFrame
 ) -> tuple[go.Figure, go.Figure, go.Figure]:
@@ -488,7 +528,17 @@ def build_points_table_components(
             columns=["batting_team", "batsman", "runs", "balls", "fours", "sixes", "strike_rate"]
         )
         top_bowling_df = pd.DataFrame(
-            columns=["bowling_team", "bowler", "wickets", "overs_bowled", "runs_conceded", "extras", "economy"]
+            columns=[
+                "bowling_team",
+                "bowler",
+                "wickets",
+                "overs_bowled",
+                "runs_conceded",
+                "extras",
+                "economy",
+                "bowling_strike_rate",
+                "bowling_average",
+            ]
         )
     else:
         top_batting_df = aggregate_batting_leaders(commentary_df)
@@ -509,7 +559,7 @@ def build_points_table_components(
     )
 
     bowling_table_fig = table_figure(
-        ["Team", "Bowler", "Wickets", "Overs", "Runs Conceded", "Extras", "Economy"],
+        ["Team", "Bowler", "Wickets", "Overs", "Runs Conceded", "Extras", "Economy", "SR", "Avg"],
         [
             top_bowling_df.get("bowling_team", pd.Series(dtype=str)),
             top_bowling_df.get("bowler", pd.Series(dtype=str)),
@@ -518,6 +568,8 @@ def build_points_table_components(
             top_bowling_df.get("runs_conceded", pd.Series(dtype=int)),
             top_bowling_df.get("extras", pd.Series(dtype=int)),
             top_bowling_df.get("economy", pd.Series(dtype=float)).round(2),
+            top_bowling_df.get("bowling_strike_rate", pd.Series(dtype=float)).round(2),
+            top_bowling_df.get("bowling_average", pd.Series(dtype=float)).round(2),
         ],
         "Top 5 Bowling Performances",
     )
@@ -547,16 +599,27 @@ def build_app(
     app.layout = html.Div(
         [
             html.H1("Ball-by-Ball Analytics Dashboard"),
-            html.P(
-                "Extras discipline, boundary dependency, dropped catches, and tournament standings."
-            ),
             html.Div(
                 [
-                    html.Span(f"Version: {APP_VERSION}", style={"marginRight": "16px"}),
-                    html.Span(f"Last updated: {LAST_UPDATED}", style={"marginRight": "16px"}),
-                    html.A("Version log", href=VERSION_LOG_HREF, target="_blank"),
+                    html.P(
+                        "Extras discipline, boundary dependency, dropped catches, and tournament standings.",
+                        style={"margin": "0"},
+                    ),
+                    html.Div(
+                        [
+                            html.Span(f"Version: {APP_VERSION}", style={"marginRight": "16px"}),
+                            html.Span(f"Last updated: {LAST_UPDATED}", style={"marginRight": "16px"}),
+                            html.A("Version log", href=VERSION_LOG_HREF, target="_blank"),
+                        ],
+                        style={"marginLeft": "auto", "textAlign": "right"},
+                    ),
                 ],
-                style={"marginBottom": "16px"},
+                style={
+                    "display": "flex",
+                    "alignItems": "baseline",
+                    "gap": "12px",
+                    "marginBottom": "16px",
+                },
             ),
             html.Div(
                 [
@@ -586,6 +649,12 @@ def build_app(
                                         style=component_style(figure_config["team_extras_type_stack"]),
                                     ),
                                     html.Div(
+                                        dcc.Graph(id="team-keeper-byes-efficiency-bar"),
+                                        style=component_style(
+                                            figure_config["team_keeper_byes_efficiency_bar"]
+                                        ),
+                                    ),
+                                    html.Div(
                                         dcc.Graph(id="team-extras-bar"),
                                         style=component_style(figure_config["team_extras_bar"]),
                                     ),
@@ -596,10 +665,6 @@ def build_app(
                                     html.Div(
                                         dcc.Graph(id="over-heatmap"),
                                         style=component_style(figure_config["over_heatmap"]),
-                                    ),
-                                    html.Div(
-                                        dcc.Graph(id="boundary-dependency-bar"),
-                                        style=component_style(figure_config["boundary_dependency_bar"]),
                                     ),
                                     html.Div(
                                         dcc.Graph(id="boundary-runs-stack"),
@@ -660,11 +725,11 @@ def build_app(
     @app.callback(
         Output("team-extras-bar", "figure"),
         Output("team-extras-total-stack", "figure"),
+        Output("team-keeper-byes-efficiency-bar", "figure"),
         Output("team-extras-type-stack", "figure"),
         Output("bowler-discipline-scatter", "figure"),
         Output("over-heatmap", "figure"),
         Output("bowler-summary-table", "figure"),
-        Output("boundary-dependency-bar", "figure"),
         Output("boundary-runs-stack", "figure"),
         Output("dropped-catches-team-bar", "figure"),
         Output("boundary-dependency-table", "figure"),
@@ -673,13 +738,27 @@ def build_app(
     )
     def update_figures(
         match_value: str,
-    ) -> tuple[go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure, go.Figure]:
+    ) -> tuple[
+        go.Figure,
+        go.Figure,
+        go.Figure,
+        go.Figure,
+        go.Figure,
+        go.Figure,
+        go.Figure,
+        go.Figure,
+        go.Figure,
+        go.Figure,
+        go.Figure,
+    ]:
         if df.empty:
             empty = empty_figure("No commentary CSVs found")
             return (empty, empty, empty, empty, empty, empty, empty, empty, empty, empty, empty)
 
         filtered = df if match_value == "ALL" else df[df["match_key"] == match_value]
         match_label_order = ordered_match_labels(filtered)
+        over_label_order = ordered_over_labels(filtered)
+        team_label_order = ordered_team_labels(filtered)
 
         team_summary = aggregate_team_summary(filtered)
         bowler_summary = aggregate_bowler_summary(filtered)
@@ -701,7 +780,10 @@ def build_app(
             "barmode": "stack",
             "hover_data": ["match_label"],
             "title": "Extra Runs Conceded by Bowling Team",
-            "category_orders": {"match_label": match_label_order},
+            "category_orders": {
+                "match_label": match_label_order,
+                "bowling_team": team_label_order,
+            },
         }
         if match_value == "ALL":
             team_fig_kwargs["facet_col"] = "match_label"
@@ -721,11 +803,35 @@ def build_app(
             barmode="stack",
             hover_data=["wide_runs", "no_ball_runs", "bye_runs", "leg_bye_runs", "extras_per_over"],
             title="Total Extras by Team with Match Contribution",
+            category_orders={"bowling_team": team_label_order, "match_label": match_label_order},
         )
         team_total_stack_fig.update_layout(
             xaxis_title="Bowling team",
             yaxis_title="Total extras",
             legend_title_text="Match",
+        )
+
+        keeper_byes_efficiency = (
+            team_summary.groupby("bowling_team", as_index=False)[["bye_runs", "legal_balls"]].sum()
+        )
+        keeper_byes_efficiency["byes_per_ball"] = keeper_byes_efficiency.apply(
+            lambda row: row["bye_runs"] / row["legal_balls"] if row["legal_balls"] > 0 else 0.0,
+            axis=1,
+        )
+        keeper_byes_efficiency_fig = px.bar(
+            keeper_byes_efficiency.sort_values(["byes_per_ball", "bowling_team"], ascending=[False, True]),
+            x="bowling_team",
+            y="byes_per_ball",
+            text="byes_per_ball",
+            hover_data=["bye_runs", "legal_balls"],
+            title="Keeper Byes Efficiency by Team (Lower is better)",
+            category_orders={"bowling_team": team_label_order},
+        )
+        keeper_byes_efficiency_fig.update_traces(texttemplate="%{text:.3f}", textposition="outside")
+        keeper_byes_efficiency_fig.update_layout(
+            xaxis_title="Team",
+            yaxis_title="Byes per ball across all matches",
+            showlegend=False,
         )
 
         team_type_stack = (
@@ -747,6 +853,7 @@ def build_app(
             color="extra_type",
             barmode="stack",
             title="Total Extras by Team with Extra Type Contribution",
+            category_orders={"bowling_team": team_label_order},
         )
         team_type_stack_fig.update_layout(
             xaxis_title="Bowling team",
@@ -791,9 +898,10 @@ def build_app(
                 facet_col="match_label" if match_value == "ALL" else None,
                 facet_col_wrap=match_count if match_value == "ALL" else 0,
                 color_continuous_scale="Reds",
-                category_orders={"match_label": match_label_order},
+                category_orders={"match_label": match_label_order, "over_label": over_label_order},
+                title="Extras Hotspot",
             )
-        heatmap_fig.update_layout(title=None)
+        heatmap_fig.update_layout(title="Extras Hotspot")
         clean_facet_annotations(heatmap_fig)
 
         display_table = bowler_summary[
@@ -819,21 +927,6 @@ def build_app(
             "Bowler Discipline Summary",
         )
 
-        boundary_pct_fig = px.bar(
-            boundary_summary,
-            x="batting_team",
-            y="boundary_dependency_pct",
-            color="match_label",
-            barmode="group",
-            hover_data=["innings_runs", "boundary_runs", "non_boundary_bat_runs", "extras_runs"],
-            title="Boundary Dependency by Batting Team",
-        )
-        boundary_pct_fig.update_layout(
-            xaxis_title="Batting team",
-            yaxis_title="Boundary dependency (%)",
-            legend_title_text="Match",
-        )
-
         boundary_mix = boundary_summary.melt(
             id_vars=["match_key", "match_label", "batting_team"],
             value_vars=["boundary_runs", "non_boundary_bat_runs", "extras_runs"],
@@ -847,7 +940,7 @@ def build_app(
             color="run_source",
             facet_col="match_label" if match_value == "ALL" else None,
             title="Innings Run Mix: Boundaries vs Running vs Extras",
-            category_orders={"match_label": match_label_order},
+            category_orders={"match_label": match_label_order, "batting_team": team_label_order},
         )
         boundary_mix_fig.update_layout(legend_title_text="Run source")
         clean_facet_annotations(boundary_mix_fig)
@@ -863,6 +956,7 @@ def build_app(
                 barmode="stack",
                 hover_data=["fielders_involved"],
                 title="Dropped Catches by Fielding Team",
+                category_orders={"fielding_team": team_label_order, "match_label": match_label_order},
             )
             dropped_team_fig.update_layout(legend_title_text="Match")
 
@@ -894,11 +988,11 @@ def build_app(
         return (
             team_fig,
             team_total_stack_fig,
+            keeper_byes_efficiency_fig,
             team_type_stack_fig,
             scatter_fig,
             heatmap_fig,
             table_fig,
-            boundary_pct_fig,
             boundary_mix_fig,
             dropped_team_fig,
             boundary_table_fig,
@@ -922,7 +1016,12 @@ def create_dash_app(
 def main() -> int:
     args = parse_args()
     app = create_dash_app(args.input_dir, args.points_table, args.figure_config)
-    app.run(host=args.host, port=args.port, debug=False)
+    app.run(
+        host=args.host,
+        port=args.port,
+        debug=not args.no_reload,
+        dev_tools_hot_reload=not args.no_reload,
+    )
     return 0
 
 

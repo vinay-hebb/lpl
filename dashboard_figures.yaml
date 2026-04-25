@@ -1,9 +1,10 @@
 figures:
   team_extras_total_stack: true
+  team_keeper_byes_efficiency_bar: true
+  team_extras_type_stack: true
   team_extras_bar: true
   bowler_discipline_scatter: true
   over_heatmap: true
-  boundary_dependency_bar: true
   boundary_runs_stack: true
   dropped_catches_team_bar: true
   bowler_summary_table: true
