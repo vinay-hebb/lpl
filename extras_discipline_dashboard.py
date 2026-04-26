@@ -13,7 +13,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import yaml
-from dash import Input, Output, dcc, html
+from dash import Input, Output, dash_table, dcc, html
 
 from commentary_common import parse_match_csv_metadata
 
@@ -524,6 +524,50 @@ def clean_facet_annotations(figure: go.Figure) -> go.Figure:
     return figure
 
 
+def build_top_bowling_table_component(top_bowling_df: pd.DataFrame) -> dash_table.DataTable:
+    display_df = pd.DataFrame(
+        {
+            "bowling_team": top_bowling_df.get("bowling_team", pd.Series(dtype=str)),
+            "bowler": top_bowling_df.get("bowler", pd.Series(dtype=str)),
+            "wickets": top_bowling_df.get("wickets", pd.Series(dtype=int)),
+            "caught": top_bowling_df.get("caught", pd.Series(dtype=int)),
+            "bowled": top_bowling_df.get("bowled", pd.Series(dtype=int)),
+            "stumped": top_bowling_df.get("stumped", pd.Series(dtype=int)),
+            "hit_wicket": top_bowling_df.get("hit_wicket", pd.Series(dtype=int)),
+            "overs_bowled": top_bowling_df.get("overs_bowled", pd.Series(dtype=float)).round(2),
+            "runs_conceded": top_bowling_df.get("runs_conceded", pd.Series(dtype=int)),
+            "extras": top_bowling_df.get("extras", pd.Series(dtype=int)),
+            "economy": top_bowling_df.get("economy", pd.Series(dtype=float)).round(2),
+            "bowling_strike_rate": top_bowling_df.get("bowling_strike_rate", pd.Series(dtype=float)).round(2),
+            "bowling_average": top_bowling_df.get("bowling_average", pd.Series(dtype=float)).round(2),
+        }
+    )
+    return dash_table.DataTable(
+        id="top-bowling-table",
+        columns=[
+            {"name": ["Identity", "Team"], "id": "bowling_team"},
+            {"name": ["Identity", "Bowler"], "id": "bowler"},
+            {"name": ["Wickets", "Total"], "id": "wickets"},
+            {"name": ["Wicket Types", "Caught"], "id": "caught"},
+            {"name": ["Wicket Types", "Bowled"], "id": "bowled"},
+            {"name": ["Wicket Types", "Stumped"], "id": "stumped"},
+            {"name": ["Wicket Types", "Hit wicket"], "id": "hit_wicket"},
+            {"name": ["Workload", "Overs"], "id": "overs_bowled"},
+            {"name": ["Runs", "Conceded"], "id": "runs_conceded"},
+            {"name": ["Runs", "Extras"], "id": "extras"},
+            {"name": ["Rates", "Economy"], "id": "economy"},
+            {"name": ["Rates", "SR"], "id": "bowling_strike_rate"},
+            {"name": ["Rates", "Avg"], "id": "bowling_average"},
+        ],
+        data=display_df.to_dict("records"),
+        merge_duplicate_headers=True,
+        style_table={"overflowX": "auto"},
+        style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
+        style_header={"fontWeight": "bold", "textAlign": "center"},
+        style_data={"whiteSpace": "normal", "height": "auto"},
+    )
+
+
 def ordered_match_labels(df: pd.DataFrame) -> list[str]:
     if df.empty:
         return []
@@ -565,10 +609,11 @@ def ordered_team_labels(df: pd.DataFrame) -> list[str]:
 
 def build_points_table_components(
     points_df: pd.DataFrame, commentary_df: pd.DataFrame
-) -> tuple[go.Figure, go.Figure, go.Figure, go.Figure]:
+) -> tuple[go.Figure, go.Figure, dash_table.DataTable, go.Figure]:
     if points_df.empty:
         empty = empty_figure("Tournament Points Table")
-        return empty, empty, empty, empty
+        empty_table = build_top_bowling_table_component(pd.DataFrame())
+        return empty, empty, empty_table, empty
 
     display_columns = [
         "Team Name",
@@ -631,42 +676,10 @@ def build_points_table_components(
         "Top 5 Batting Performances",
     )
 
-    bowling_table_fig = table_figure(
-        [
-            "Team",
-            "Bowler",
-            "Wickets",
-            "Caught",
-            "Bowled",
-            "Stumped",
-            "Hit wicket",
-            "Overs",
-            "Runs Conceded",
-            "Extras",
-            "Economy",
-            "SR",
-            "Avg",
-        ],
-        [
-            top_bowling_df.get("bowling_team", pd.Series(dtype=str)),
-            top_bowling_df.get("bowler", pd.Series(dtype=str)),
-            top_bowling_df.get("wickets", pd.Series(dtype=int)),
-            top_bowling_df.get("caught", pd.Series(dtype=int)),
-            top_bowling_df.get("bowled", pd.Series(dtype=int)),
-            top_bowling_df.get("stumped", pd.Series(dtype=int)),
-            top_bowling_df.get("hit_wicket", pd.Series(dtype=int)),
-            top_bowling_df.get("overs_bowled", pd.Series(dtype=float)).round(2),
-            top_bowling_df.get("runs_conceded", pd.Series(dtype=int)),
-            top_bowling_df.get("extras", pd.Series(dtype=int)),
-            top_bowling_df.get("economy", pd.Series(dtype=float)).round(2),
-            top_bowling_df.get("bowling_strike_rate", pd.Series(dtype=float)).round(2),
-            top_bowling_df.get("bowling_average", pd.Series(dtype=float)).round(2),
-        ],
-        "Top 5 Bowling Performances",
-    )
+    bowling_table_component = build_top_bowling_table_component(top_bowling_df)
     top_bowler_wicket_types_fig = build_top_bowler_wicket_types_figure(top_bowling_df)
 
-    return table_fig, batting_table_fig, bowling_table_fig, top_bowler_wicket_types_fig
+    return table_fig, batting_table_fig, bowling_table_component, top_bowler_wicket_types_fig
 
 
 def build_app(
@@ -686,7 +699,7 @@ def build_app(
             )
         )
 
-    points_table_fig, top_batting_fig, top_bowling_fig, top_bowler_wicket_types_fig = (
+    points_table_fig, top_batting_fig, top_bowling_table, top_bowler_wicket_types_fig = (
         build_points_table_components(points_df, df)
     )
 
@@ -805,7 +818,10 @@ def build_app(
                                 style=component_style(figure_config["top_batting_table"]),
                             ),
                             html.Div(
-                                dcc.Graph(figure=top_bowling_fig, id="top-bowling-table"),
+                                [
+                                    html.H2("Top 5 Bowling Performances"),
+                                    top_bowling_table,
+                                ],
                                 style=component_style(figure_config["top_bowling_table"]),
                             ),
                             html.Div(

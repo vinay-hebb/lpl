@@ -4,6 +4,7 @@ import pandas as pd
 
 from extras_discipline_dashboard import (
     aggregate_bowling_leaders,
+    build_points_table_components,
     build_top_bowler_wicket_types_figure,
     resolve_wicket_type,
 )
@@ -104,3 +105,51 @@ def test_build_top_bowler_wicket_types_figure_uses_non_zero_counts() -> None:
 
     trace_names = {trace.name for trace in figure.data}
     assert trace_names == {"Caught", "Bowled", "Hit wicket"}
+
+
+def test_build_points_table_components_uses_grouped_bowling_headers() -> None:
+    points_df = pd.DataFrame(
+        [
+            {
+                "Team Name": "Team 1",
+                "Matches": 1,
+                "Won": 1,
+                "Lost": 0,
+                "Points": 2,
+                "Net RR": 1.0,
+                "For": "10/1",
+                "Against": "9/2",
+                "Last 5": "W",
+            }
+        ]
+    )
+    commentary_df = pd.DataFrame(
+        [
+            {
+                "batting_team": "Team 2",
+                "bowling_team": "Team 1",
+                "batsman": "Batter A",
+                "bowler": "Bowler A",
+                "batsman_runs": 0,
+                "extras": 0,
+                "extra_type": "none",
+                "is_boundary": 0,
+                "boundary_type": "",
+                "is_wicket": 1,
+                "dismissal_kind": "out",
+                "wicket_type": "caught",
+                "is_legal_ball": 1,
+                "total_runs": 0,
+            }
+        ]
+    )
+
+    _, _, bowling_table_component, _ = build_points_table_components(points_df, commentary_df)
+
+    assert bowling_table_component.merge_duplicate_headers is True
+    assert bowling_table_component.columns[:4] == [
+        {"name": ["Identity", "Team"], "id": "bowling_team"},
+        {"name": ["Identity", "Bowler"], "id": "bowler"},
+        {"name": ["Wickets", "Total"], "id": "wickets"},
+        {"name": ["Wicket Types", "Caught"], "id": "caught"},
+    ]
