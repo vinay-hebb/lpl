@@ -13,3 +13,4 @@ figures:
   points_table_table: true
   top_batting_table: true
   top_bowling_table: true
+  top_bowler_wicket_types_chart: true

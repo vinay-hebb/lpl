@@ -20,7 +20,7 @@ from commentary_common import parse_match_csv_metadata
 
 DROP_RE = re.compile(r"dropped by\s+(?P<fielder>[^,#]+)", re.IGNORECASE)
 APP_VERSION = "0.2.0"
-LAST_UPDATED = "2026-04-25 12:08 IST"
+LAST_UPDATED = "2026-04-26 11:15 IST"
 VERSION_LOG_HREF = "/assets/version_log.md"
 
 
@@ -123,6 +123,7 @@ def load_commentary_data(input_dir: Path) -> pd.DataFrame:
     df["no_ball_events"] = (df["extra_type"] == "no_ball").astype(int)
     df["drop_fielder"] = df["commentary"].apply(extract_drop_fielder)
     df["is_dropped_catch"] = df["drop_fielder"].ne("")
+    df["wicket_type"] = df.apply(resolve_wicket_type, axis=1)
     return df
 
 
@@ -163,6 +164,7 @@ def load_figure_config(config_path: Path) -> dict[str, bool]:
         "points_table_table": True,
         "top_batting_table": True,
         "top_bowling_table": True,
+        "top_bowler_wicket_types_chart": True,
     }
     if not config_path.exists():
         return default_config
@@ -198,6 +200,29 @@ def extract_drop_fielder(commentary: str) -> str:
     if match is None:
         return ""
     return match.group("fielder").strip()
+
+
+def resolve_wicket_type(row: pd.Series) -> str:
+    dismissal_kind = str(row.get("dismissal_kind", "")).strip().lower()
+    commentary = str(row.get("commentary", "")).strip().lower()
+
+    if dismissal_kind == "retired_hurt" or "retired hurt" in commentary:
+        return "retired_hurt"
+    if dismissal_kind == "run_out" or "run out" in commentary:
+        return "run_out"
+    if "hit wicket" in commentary or "hit wkt" in commentary:
+        return "hit_wicket"
+    if "stumped" in commentary:
+        return "stumped"
+    if "lbw" in commentary:
+        return "lbw"
+    if "caught out" in commentary or "caught by" in commentary:
+        return "caught"
+    if "bowled" in commentary:
+        return "bowled"
+    if dismissal_kind == "out" or "out " in commentary:
+        return "out"
+    return ""
 
 
 def aggregate_bowler_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -396,6 +421,11 @@ def aggregate_bowling_leaders(df: pd.DataFrame) -> pd.DataFrame:
             legal_balls=("is_legal_ball", "sum"),
             runs_conceded=("runs_conceded", "sum"),
             extras=("extras", "sum"),
+            caught=("wicket_type", lambda s: int((s == "caught").sum())),
+            bowled=("wicket_type", lambda s: int((s == "bowled").sum())),
+            lbw=("wicket_type", lambda s: int((s == "lbw").sum())),
+            stumped=("wicket_type", lambda s: int((s == "stumped").sum())),
+            hit_wicket=("wicket_type", lambda s: int((s == "hit_wicket").sum())),
         )
         .reset_index()
     )
@@ -414,6 +444,45 @@ def aggregate_bowling_leaders(df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
     return grouped.sort_values(["wickets", "economy", "runs_conceded"], ascending=[False, True, True]).head(5)
+
+
+def build_top_bowler_wicket_types_figure(top_bowling_df: pd.DataFrame) -> go.Figure:
+    wicket_type_columns = ["caught", "bowled", "stumped", "hit_wicket"]
+    label_map = {
+        "caught": "Caught",
+        "bowled": "Bowled",
+        "stumped": "Stumped",
+        "hit_wicket": "Hit wicket",
+    }
+    if top_bowling_df.empty:
+        return empty_figure("Wicket Types for Top 5 Bowlers")
+
+    wicket_type_df = top_bowling_df[["bowler", *wicket_type_columns]].melt(
+        id_vars=["bowler"],
+        value_vars=wicket_type_columns,
+        var_name="wicket_type",
+        value_name="count",
+    )
+    wicket_type_df = wicket_type_df[wicket_type_df["count"] > 0].copy()
+    if wicket_type_df.empty:
+        return empty_figure("Wicket Types for Top 5 Bowlers")
+
+    wicket_type_df["wicket_type_label"] = wicket_type_df["wicket_type"].map(label_map)
+    figure = px.bar(
+        wicket_type_df,
+        x="bowler",
+        y="count",
+        color="wicket_type_label",
+        barmode="group",
+        title="Wicket Types for Top 5 Bowlers",
+        category_orders={"bowler": top_bowling_df["bowler"].tolist()},
+    )
+    figure.update_layout(
+        xaxis_title="Bowler",
+        yaxis_title="Dismissals",
+        legend_title_text="Wicket type",
+    )
+    return figure
 
 
 def empty_figure(title: str) -> go.Figure:
@@ -496,10 +565,10 @@ def ordered_team_labels(df: pd.DataFrame) -> list[str]:
 
 def build_points_table_components(
     points_df: pd.DataFrame, commentary_df: pd.DataFrame
-) -> tuple[go.Figure, go.Figure, go.Figure]:
+) -> tuple[go.Figure, go.Figure, go.Figure, go.Figure]:
     if points_df.empty:
         empty = empty_figure("Tournament Points Table")
-        return empty, empty, empty
+        return empty, empty, empty, empty
 
     display_columns = [
         "Team Name",
@@ -538,6 +607,10 @@ def build_points_table_components(
                 "economy",
                 "bowling_strike_rate",
                 "bowling_average",
+                "caught",
+                "bowled",
+                "stumped",
+                "hit_wicket",
             ]
         )
     else:
@@ -559,11 +632,29 @@ def build_points_table_components(
     )
 
     bowling_table_fig = table_figure(
-        ["Team", "Bowler", "Wickets", "Overs", "Runs Conceded", "Extras", "Economy", "SR", "Avg"],
+        [
+            "Team",
+            "Bowler",
+            "Wickets",
+            "Caught",
+            "Bowled",
+            "Stumped",
+            "Hit wicket",
+            "Overs",
+            "Runs Conceded",
+            "Extras",
+            "Economy",
+            "SR",
+            "Avg",
+        ],
         [
             top_bowling_df.get("bowling_team", pd.Series(dtype=str)),
             top_bowling_df.get("bowler", pd.Series(dtype=str)),
             top_bowling_df.get("wickets", pd.Series(dtype=int)),
+            top_bowling_df.get("caught", pd.Series(dtype=int)),
+            top_bowling_df.get("bowled", pd.Series(dtype=int)),
+            top_bowling_df.get("stumped", pd.Series(dtype=int)),
+            top_bowling_df.get("hit_wicket", pd.Series(dtype=int)),
             top_bowling_df.get("overs_bowled", pd.Series(dtype=float)).round(2),
             top_bowling_df.get("runs_conceded", pd.Series(dtype=int)),
             top_bowling_df.get("extras", pd.Series(dtype=int)),
@@ -573,8 +664,9 @@ def build_points_table_components(
         ],
         "Top 5 Bowling Performances",
     )
+    top_bowler_wicket_types_fig = build_top_bowler_wicket_types_figure(top_bowling_df)
 
-    return table_fig, batting_table_fig, bowling_table_fig
+    return table_fig, batting_table_fig, bowling_table_fig, top_bowler_wicket_types_fig
 
 
 def build_app(
@@ -594,7 +686,9 @@ def build_app(
             )
         )
 
-    points_table_fig, top_batting_fig, top_bowling_fig = build_points_table_components(points_df, df)
+    points_table_fig, top_batting_fig, top_bowling_fig, top_bowler_wicket_types_fig = (
+        build_points_table_components(points_df, df)
+    )
 
     app.layout = html.Div(
         [
@@ -713,6 +807,13 @@ def build_app(
                             html.Div(
                                 dcc.Graph(figure=top_bowling_fig, id="top-bowling-table"),
                                 style=component_style(figure_config["top_bowling_table"]),
+                            ),
+                            html.Div(
+                                dcc.Graph(
+                                    figure=top_bowler_wicket_types_fig,
+                                    id="top-bowler-wicket-types-chart",
+                                ),
+                                style=component_style(figure_config["top_bowler_wicket_types_chart"]),
                             ),
                         ],
                     ),
