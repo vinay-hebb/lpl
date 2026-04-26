@@ -18,25 +18,25 @@ Run the full local pipeline in this order:
 1. Refresh scorecards and points table
 
 ```bash
-/home/vinay/others/envs/py312/bin/python -Bu download_scorecards.py
+python -Bu download_scorecards.py
 ```
 
 2. Rename commentary PDFs with detected match dates and rebuild match CSVs
 
 ```bash
-/home/vinay/others/envs/py312/bin/python -Bu build_match_commentary_csvs.py --input-dir ball-by-ball --scorecards-dir scorecards
+python -Bu build_match_commentary_csvs.py --input-dir ball-by-ball --scorecards-dir scorecards
 ```
 
 3. Validate commentary extras against scorecards
 
 ```bash
-/home/vinay/others/envs/py312/bin/python -Bu test/test_scorecard_extras.py --commentary-dir ball-by-ball --scorecards-dir scorecards
+python -Bu test/test_scorecard_extras.py --commentary-dir ball-by-ball --scorecards-dir scorecards
 ```
 
 4. Run the dashboard locally
 
 ```bash
-/home/vinay/others/envs/py312/bin/python -Bu extras_discipline_dashboard.py --input-dir ball-by-ball --points-table scorecards/tournament_points_table.json
+python -Bu extras_discipline_dashboard.py --input-dir ball-by-ball --points-table scorecards/tournament_points_table.json
 ```
 
 For a quick CSV rebuild only, you can also use:
