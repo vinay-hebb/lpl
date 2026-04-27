@@ -19,8 +19,8 @@ from commentary_common import parse_match_csv_metadata
 
 
 DROP_RE = re.compile(r"dropped by\s+(?P<fielder>[^,#]+)", re.IGNORECASE)
-APP_VERSION = "0.2.0"
-LAST_UPDATED = "2026-04-26 11:15 IST"
+APP_VERSION = "0.3.0"
+LAST_UPDATED = "2026-04-27 08:36 IST"
 VERSION_LOG_HREF = "/assets/version_log.md"
 
 
@@ -164,6 +164,7 @@ def load_figure_config(config_path: Path) -> dict[str, bool]:
         "points_table_table": True,
         "top_batting_table": True,
         "top_bowling_table": True,
+        "top_batter_scoring_types_chart": True,
         "top_bowler_wicket_types_chart": True,
     }
     if not config_path.exists():
@@ -387,12 +388,18 @@ def aggregate_batting_leaders(df: pd.DataFrame) -> pd.DataFrame:
         .agg(
             runs=("batsman_runs", "sum"),
             balls=("batsman", "size"),
+            ones=("batsman_runs", lambda s: int((s == 1).sum())),
+            twos=("batsman_runs", lambda s: int((s == 2).sum())),
             fours=("boundary_type", lambda s: int((s == "FOUR").sum())),
             sixes=("boundary_type", lambda s: int((s == "SIX").sum())),
         )
         .reset_index()
     )
     grouped = grouped[grouped["batsman"].ne("")]
+    grouped["ones_runs"] = grouped["ones"]
+    grouped["twos_runs"] = grouped["twos"] * 2
+    grouped["fours_runs"] = grouped["fours"] * 4
+    grouped["sixes_runs"] = grouped["sixes"] * 6
     grouped["strike_rate"] = grouped.apply(
         lambda row: row["runs"] / row["balls"] * 100.0 if row["balls"] > 0 else 0.0,
         axis=1,
@@ -457,8 +464,14 @@ def build_top_bowler_wicket_types_figure(top_bowling_df: pd.DataFrame) -> go.Fig
     if top_bowling_df.empty:
         return empty_figure("Wicket Types for Top 5 Bowlers")
 
-    wicket_type_df = top_bowling_df[["bowler", *wicket_type_columns]].melt(
-        id_vars=["bowler"],
+    wicket_type_df = top_bowling_df[["bowler", *wicket_type_columns]].copy()
+    wicket_type_df["tracked_wickets"] = wicket_type_df[wicket_type_columns].sum(axis=1)
+    wicket_type_df = wicket_type_df[wicket_type_df["tracked_wickets"] > 0]
+    if wicket_type_df.empty:
+        return empty_figure("Wicket Types for Top 5 Bowlers")
+
+    wicket_type_df = wicket_type_df.melt(
+        id_vars=["bowler", "tracked_wickets"],
         value_vars=wicket_type_columns,
         var_name="wicket_type",
         value_name="count",
@@ -468,19 +481,141 @@ def build_top_bowler_wicket_types_figure(top_bowling_df: pd.DataFrame) -> go.Fig
         return empty_figure("Wicket Types for Top 5 Bowlers")
 
     wicket_type_df["wicket_type_label"] = wicket_type_df["wicket_type"].map(label_map)
+    wicket_type_df["percentage"] = wicket_type_df.apply(
+        lambda row: row["count"] / row["tracked_wickets"] * 100.0 if row["tracked_wickets"] > 0 else 0.0,
+        axis=1,
+    )
     figure = px.bar(
         wicket_type_df,
         x="bowler",
-        y="count",
+        y="percentage",
         color="wicket_type_label",
-        barmode="group",
-        title="Wicket Types for Top 5 Bowlers",
+        barmode="stack",
+        title="Wicket-Type Contribution for Top 5 Bowlers",
         category_orders={"bowler": top_bowling_df["bowler"].tolist()},
+        custom_data=["count"],
     )
     figure.update_layout(
         xaxis_title="Bowler",
-        yaxis_title="Dismissals",
+        yaxis_title="Contribution (%)",
         legend_title_text="Wicket type",
+    )
+    figure.update_traces(
+        hovertemplate="%{x}<br>%{fullData.name}: %{y:.1f}%<br>Wickets: %{customdata[0]}<extra></extra>"
+    )
+    return figure
+
+
+def build_top_batting_table_component(top_batting_df: pd.DataFrame) -> dash_table.DataTable:
+    display_df = pd.DataFrame(
+        {
+            "batting_team": top_batting_df.get("batting_team", pd.Series(dtype=str)),
+            "batsman": top_batting_df.get("batsman", pd.Series(dtype=str)),
+            "runs": top_batting_df.get("runs", pd.Series(dtype=int)),
+            "balls": top_batting_df.get("balls", pd.Series(dtype=int)),
+            "ones": top_batting_df.get("ones", pd.Series(dtype=int)),
+            "twos": top_batting_df.get("twos", pd.Series(dtype=int)),
+            "fours": top_batting_df.get("fours", pd.Series(dtype=int)),
+            "sixes": top_batting_df.get("sixes", pd.Series(dtype=int)),
+            "strike_rate": top_batting_df.get("strike_rate", pd.Series(dtype=float)).round(2),
+        }
+    )
+    return dash_table.DataTable(
+        id="top-batting-table",
+        columns=[
+            {"name": ["Identity", "Team"], "id": "batting_team"},
+            {"name": ["Identity", "Batsman"], "id": "batsman"},
+            {"name": ["Output", "Runs"], "id": "runs"},
+            {"name": ["Output", "Balls"], "id": "balls"},
+            {"name": ["Scoring Shots", "1s"], "id": "ones"},
+            {"name": ["Scoring Shots", "2s"], "id": "twos"},
+            {"name": ["Scoring Shots", "4s"], "id": "fours"},
+            {"name": ["Scoring Shots", "6s"], "id": "sixes"},
+            {"name": ["Rates", "SR"], "id": "strike_rate"},
+        ],
+        data=display_df.to_dict("records"),
+        merge_duplicate_headers=True,
+        style_table={"overflowX": "auto"},
+        style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
+        style_header={"fontWeight": "bold", "textAlign": "center"},
+        style_data={"whiteSpace": "normal", "height": "auto"},
+    )
+
+
+def build_points_table_component(points_df: pd.DataFrame) -> dash_table.DataTable:
+    display_columns = [
+        "Team Name",
+        "Matches",
+        "Won",
+        "Lost",
+        "Points",
+        "Net RR",
+        "For",
+        "Against",
+        "Last 5",
+    ]
+    available_columns = [column for column in display_columns if column in points_df.columns]
+    display_df = points_df[available_columns].copy() if available_columns else pd.DataFrame()
+    if "Net RR" in display_df.columns:
+        display_df["Net RR"] = display_df["Net RR"].round(3)
+
+    return dash_table.DataTable(
+        id="points-table-table",
+        columns=[{"name": column, "id": column} for column in display_df.columns],
+        data=display_df.to_dict("records"),
+        style_table={"overflowX": "auto"},
+        style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
+        style_header={"fontWeight": "bold", "textAlign": "center"},
+        style_data={"whiteSpace": "normal", "height": "auto"},
+    )
+
+
+def build_top_batter_scoring_types_figure(top_batting_df: pd.DataFrame) -> go.Figure:
+    scoring_columns = ["ones_runs", "twos_runs", "fours_runs", "sixes_runs"]
+    label_map = {
+        "ones_runs": "1s",
+        "twos_runs": "2s",
+        "fours_runs": "4s",
+        "sixes_runs": "6s",
+    }
+    if top_batting_df.empty:
+        return empty_figure("Scoring-Type Run Contribution for Top 5 Batters")
+
+    contribution_df = top_batting_df[["batsman", *scoring_columns]].copy()
+    contribution_df["tracked_runs"] = contribution_df[scoring_columns].sum(axis=1)
+    contribution_df = contribution_df[contribution_df["tracked_runs"] > 0]
+    if contribution_df.empty:
+        return empty_figure("Scoring-Type Run Contribution for Top 5 Batters")
+
+    contribution_df = contribution_df.melt(
+        id_vars=["batsman", "tracked_runs"],
+        value_vars=scoring_columns,
+        var_name="scoring_type",
+        value_name="runs",
+    )
+    contribution_df = contribution_df[contribution_df["runs"] > 0].copy()
+    contribution_df["percentage"] = contribution_df.apply(
+        lambda row: row["runs"] / row["tracked_runs"] * 100.0 if row["tracked_runs"] > 0 else 0.0,
+        axis=1,
+    )
+    contribution_df["scoring_type_label"] = contribution_df["scoring_type"].map(label_map)
+    figure = px.bar(
+        contribution_df,
+        x="batsman",
+        y="percentage",
+        color="scoring_type_label",
+        barmode="stack",
+        title="Run Contribution of 1s, 2s, 4s, and 6s for Top 5 Batters",
+        category_orders={"batsman": top_batting_df["batsman"].tolist()},
+        custom_data=["runs"],
+    )
+    figure.update_layout(
+        xaxis_title="Batsman",
+        yaxis_title="Contribution (%)",
+        legend_title_text="Scoring type",
+    )
+    figure.update_traces(
+        hovertemplate="%{x}<br>%{fullData.name}: %{y:.1f}%<br>Runs: %{customdata[0]}<extra></extra>"
     )
     return figure
 
@@ -609,37 +744,33 @@ def ordered_team_labels(df: pd.DataFrame) -> list[str]:
 
 def build_points_table_components(
     points_df: pd.DataFrame, commentary_df: pd.DataFrame
-) -> tuple[go.Figure, go.Figure, dash_table.DataTable, go.Figure]:
+) -> tuple[dash_table.DataTable, dash_table.DataTable, dash_table.DataTable, go.Figure, go.Figure]:
     if points_df.empty:
-        empty = empty_figure("Tournament Points Table")
+        empty_points_table = build_points_table_component(pd.DataFrame())
+        empty_batting_table = build_top_batting_table_component(pd.DataFrame())
         empty_table = build_top_bowling_table_component(pd.DataFrame())
-        return empty, empty, empty_table, empty
+        empty_figure_component = empty_figure("Tournament Points Table")
+        return empty_points_table, empty_batting_table, empty_table, empty_figure_component, empty_figure_component
 
-    display_columns = [
-        "Team Name",
-        "Matches",
-        "Won",
-        "Lost",
-        "Points",
-        "Net RR",
-        "For",
-        "Against",
-        "Last 5",
-    ]
-    available_columns = [column for column in display_columns if column in points_df.columns]
-    display_df = points_df[available_columns].copy()
-    if "Net RR" in display_df.columns:
-        display_df["Net RR"] = display_df["Net RR"].round(3)
-
-    table_fig = table_figure(
-        list(display_df.columns),
-        [display_df[col] for col in display_df.columns],
-        "Tournament Points Table",
-    )
+    points_table_component = build_points_table_component(points_df)
 
     if commentary_df.empty:
         top_batting_df = pd.DataFrame(
-            columns=["batting_team", "batsman", "runs", "balls", "fours", "sixes", "strike_rate"]
+            columns=[
+                "batting_team",
+                "batsman",
+                "runs",
+                "balls",
+                "ones",
+                "twos",
+                "fours",
+                "sixes",
+                "ones_runs",
+                "twos_runs",
+                "fours_runs",
+                "sixes_runs",
+                "strike_rate",
+            ]
         )
         top_bowling_df = pd.DataFrame(
             columns=[
@@ -662,24 +793,18 @@ def build_points_table_components(
         top_batting_df = aggregate_batting_leaders(commentary_df)
         top_bowling_df = aggregate_bowling_leaders(commentary_df)
 
-    batting_table_fig = table_figure(
-        ["Team", "Batsman", "Runs", "Balls", "4s", "6s", "SR"],
-        [
-            top_batting_df.get("batting_team", pd.Series(dtype=str)),
-            top_batting_df.get("batsman", pd.Series(dtype=str)),
-            top_batting_df.get("runs", pd.Series(dtype=int)),
-            top_batting_df.get("balls", pd.Series(dtype=int)),
-            top_batting_df.get("fours", pd.Series(dtype=int)),
-            top_batting_df.get("sixes", pd.Series(dtype=int)),
-            top_batting_df.get("strike_rate", pd.Series(dtype=float)).round(2),
-        ],
-        "Top 5 Batting Performances",
-    )
-
+    batting_table_component = build_top_batting_table_component(top_batting_df)
+    top_batter_scoring_types_fig = build_top_batter_scoring_types_figure(top_batting_df)
     bowling_table_component = build_top_bowling_table_component(top_bowling_df)
     top_bowler_wicket_types_fig = build_top_bowler_wicket_types_figure(top_bowling_df)
 
-    return table_fig, batting_table_fig, bowling_table_component, top_bowler_wicket_types_fig
+    return (
+        points_table_component,
+        batting_table_component,
+        bowling_table_component,
+        top_batter_scoring_types_fig,
+        top_bowler_wicket_types_fig,
+    )
 
 
 def build_app(
@@ -699,7 +824,7 @@ def build_app(
             )
         )
 
-    points_table_fig, top_batting_fig, top_bowling_table, top_bowler_wicket_types_fig = (
+    points_table_component, top_batting_table, top_bowling_table, top_batter_scoring_types_fig, top_bowler_wicket_types_fig = (
         build_points_table_components(points_df, df)
     )
 
@@ -810,11 +935,17 @@ def build_app(
                         label="Points Table",
                         children=[
                             html.Div(
-                                dcc.Graph(figure=points_table_fig, id="points-table-table"),
+                                [
+                                    html.H2("Tournament Points Table"),
+                                    points_table_component,
+                                ],
                                 style=component_style(figure_config["points_table_table"]),
                             ),
                             html.Div(
-                                dcc.Graph(figure=top_batting_fig, id="top-batting-table"),
+                                [
+                                    html.H2("Top 5 Batting Performances"),
+                                    top_batting_table,
+                                ],
                                 style=component_style(figure_config["top_batting_table"]),
                             ),
                             html.Div(
@@ -823,6 +954,13 @@ def build_app(
                                     top_bowling_table,
                                 ],
                                 style=component_style(figure_config["top_bowling_table"]),
+                            ),
+                            html.Div(
+                                dcc.Graph(
+                                    figure=top_batter_scoring_types_fig,
+                                    id="top-batter-scoring-types-chart",
+                                ),
+                                style=component_style(figure_config["top_batter_scoring_types_chart"]),
                             ),
                             html.Div(
                                 dcc.Graph(
