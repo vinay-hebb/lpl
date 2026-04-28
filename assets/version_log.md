@@ -1,5 +1,13 @@
 # Version Log
 
+## 0.4.0 - 2026-04-28
+
+- Switched the batting and bowling leaderboards to scorecard-first derivation where local scorecards are sufficient, while keeping commentary-only fields such as batting 1s and 2s.
+- Marked scorecard-derived points-table, batting-table, and bowling-table metrics with `*` and added dashboard footnotes explaining the data source.
+- Fixed match metadata repair for inconsistent commentary CSV filenames, removed the unexpected `Unknown` team from extras charts, and corrected top-bowling team attribution and wicket totals.
+- Renamed commentary PDFs to the canonical `<batting_team>_<date>.pdf` format using batting team text extracted directly from each PDF.
+- Rebuilt commentary CSVs with corrected `2026-04-27` match metadata and added the normalized tournament batting/bowling scoring note plus refresh-pipeline documentation updates.
+
 ## 0.3.0 - 2026-04-27
 
 - Converted the tournament points table to a Dash `DataTable` for consistent tabular rendering with the batting and bowling leaderboards.
