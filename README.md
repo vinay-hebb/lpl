@@ -39,6 +39,12 @@ python -Bu test/test_scorecard_extras.py --commentary-dir ball-by-ball --scoreca
 python -Bu extras_discipline_dashboard.py --input-dir ball-by-ball --points-table scorecards/tournament_points_table.json
 ```
 
+For a single-command refresh of latest scorecards plus downstream rebuild and validation, use:
+
+```bash
+./refresh_pipeline.sh
+```
+
 For a quick CSV rebuild only, you can also use:
 
 ```bash
@@ -50,6 +56,7 @@ For a quick CSV rebuild only, you can also use:
 | Script | What it does |
 | --- | --- |
 | `download_scorecards.py` | Refreshes the CricHeroes past matches page, updates `scorecards/past_matches.json`, refreshes the tournament points table, and downloads any scorecard HTML/JSON files that are not already present locally. |
+| `refresh_pipeline.sh` | Single-command wrapper that refreshes scorecards, rebuilds commentary CSVs, and validates commentary extras against scorecards. |
 | `build_match_commentary_csvs.py` | Reads all CricHeroes commentary PDFs in `ball-by-ball`, renames undated PDFs using the match date extracted from the PDF text, merges innings PDFs into one per-match CSV, and rewrites the CSV set. |
 | `generate_commentary_csvs.sh` | Thin wrapper that runs `build_match_commentary_csvs.py`. |
 | `extract_commentary_csv.py` | Low-level parser used by the rebuild step to extract raw text from a single PDF and convert commentary rows into structured ball-by-ball records. |
