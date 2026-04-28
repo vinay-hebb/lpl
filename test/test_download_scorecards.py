@@ -66,6 +66,8 @@ def build_scorecard_html() -> str:
                             "overs_played": "2.0",
                         },
                         "extras": {},
+                        "batting": [{"name": "Batter A", "runs": 10, "balls": 8, "4s": 1, "6s": 0}],
+                        "bowling": [{"name": "Bowler A", "overs": 2, "balls": 0, "runs": 10, "wickets": 1}],
                     }
                 ]
             }
@@ -105,7 +107,11 @@ def test_download_scorecards_refreshes_cached_match_index(monkeypatch, tmp_path:
     assert result == 0
     matches = json.loads((output_dir / "past_matches.json").read_text(encoding="utf-8"))
     assert [match["match_id"] for match in matches] == [2]
-    assert (output_dir / "2_fresh-team-vs-new-team.json").exists()
+    scorecard_payload = json.loads(
+        (output_dir / "2_fresh-team-vs-new-team.json").read_text(encoding="utf-8")
+    )
+    assert scorecard_payload["scorecard"][0]["batting"][0]["name"] == "Batter A"
+    assert scorecard_payload["scorecard"][0]["bowling"][0]["name"] == "Bowler A"
 
 
 def test_fetch_text_with_cache_falls_back_to_existing_html(monkeypatch, tmp_path: Path) -> None:

@@ -104,6 +104,7 @@ def normalize_scorecard_payload(match: dict, page_payload: dict, scorecard_url: 
         "scorecard_url": scorecard_url,
         "result": match["match_summary"]["summary"],
         "innings": innings_payload,
+        "scorecard": scorecard_rows,
     }
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from collections import defaultdict
 from pathlib import Path
 
 import dash
@@ -19,6 +20,9 @@ from commentary_common import parse_match_csv_metadata
 
 
 DROP_RE = re.compile(r"dropped by\s+(?P<fielder>[^,#]+)", re.IGNORECASE)
+NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(?P<payload>.+?)</script>'
+)
 APP_VERSION = "0.3.0"
 LAST_UPDATED = "2026-04-27 08:36 IST"
 VERSION_LOG_HREF = "/assets/version_log.md"
@@ -124,6 +128,7 @@ def load_commentary_data(input_dir: Path) -> pd.DataFrame:
     df["drop_fielder"] = df["commentary"].apply(extract_drop_fielder)
     df["is_dropped_catch"] = df["drop_fielder"].ne("")
     df["wicket_type"] = df.apply(resolve_wicket_type, axis=1)
+    df = repair_commentary_match_metadata(df, Path("scorecards") / "past_matches.json")
     return df
 
 
@@ -145,7 +150,216 @@ def load_points_table(points_table_path: Path) -> pd.DataFrame:
     if "Net RR" in points_df.columns:
         points_df["Net RR"] = pd.to_numeric(points_df["Net RR"], errors="coerce").fillna(0.0)
 
+    points_df = apply_scorecard_points_overrides(points_df, points_table_path.parent)
     return points_df.sort_values(["Points", "Net RR"], ascending=[False, False])
+
+
+def parse_overs_to_balls(overs_value: str | float | int) -> int | None:
+    text = str(overs_value).strip()
+    if not text or text.lower() == "nan":
+        return None
+    if "." not in text:
+        try:
+            return int(text) * 6
+        except ValueError:
+            return None
+    overs_text, balls_text = text.split(".", 1)
+    try:
+        overs = int(overs_text)
+        balls = int(balls_text)
+    except ValueError:
+        return None
+    if balls < 0 or balls > 5:
+        return None
+    return overs * 6 + balls
+
+
+def format_balls_as_overs(balls: int) -> str:
+    overs = balls // 6
+    remaining_balls = balls % 6
+    if remaining_balls == 0:
+        return f"{overs}"
+    return f"{overs}.{remaining_balls}"
+
+
+def classify_result_code(match_payload: dict, team_name: str) -> str | None:
+    winning_team = str(match_payload.get("winning_team", "")).strip()
+    match_result = str(match_payload.get("match_result", "")).strip().lower()
+    summary = str(match_payload.get("match_summary", {}).get("summary", "")).strip().lower()
+
+    if match_result == "resulted" and winning_team:
+        return "W" if team_name == winning_team else "L"
+    if "tie" in summary:
+        return "T"
+    if "draw" in summary:
+        return "D"
+    if "no result" in summary or match_result in {"abandoned", "cancelled"}:
+        return "N"
+    return None
+
+
+def load_scorecard_derivations(scorecards_dir: Path) -> dict[str, dict[str, object]]:
+    past_matches_path = scorecards_dir / "past_matches.json"
+    if not past_matches_path.exists():
+        return {}
+
+    try:
+        past_matches = json.loads(past_matches_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    scorecard_payload_by_match_id: dict[int, dict] = {}
+    for scorecard_path in sorted(scorecards_dir.glob("*.json")):
+        if scorecard_path.name in {"past_matches.json", "tournament_points_table.json"}:
+            continue
+        try:
+            payload = json.loads(scorecard_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        match_id = payload.get("match_id")
+        if match_id is None:
+            continue
+        try:
+            scorecard_payload_by_match_id[int(match_id)] = payload
+        except (TypeError, ValueError):
+            continue
+
+    team_rows: dict[str, dict[str, object]] = {}
+    team_results: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    team_run_rate_totals: dict[str, dict[str, int]] = defaultdict(
+        lambda: {
+            "for_runs": 0,
+            "for_balls": 0,
+            "against_runs": 0,
+            "against_balls": 0,
+        }
+    )
+
+    for match in past_matches:
+        team_names = [str(match.get("team_a", "")).strip(), str(match.get("team_b", "")).strip()]
+        if any(not team_name for team_name in team_names):
+            continue
+
+        match_id = match.get("match_id")
+        try:
+            match_id_int = int(match_id)
+        except (TypeError, ValueError):
+            continue
+        scorecard_payload = scorecard_payload_by_match_id.get(match_id_int)
+        if scorecard_payload is None:
+            continue
+
+        innings_by_team = {
+            str(innings.get("teamName", "")).strip(): innings
+            for innings in scorecard_payload.get("innings", [])
+            if str(innings.get("teamName", "")).strip()
+        }
+        scheduled_overs = match.get("overs")
+        scheduled_balls = match.get("balls", 0)
+        try:
+            scheduled_total_balls = int(scheduled_overs) * 6 + int(scheduled_balls)
+        except (TypeError, ValueError):
+            scheduled_total_balls = None
+
+        match_time = str(match.get("match_end_time") or match.get("match_start_time") or "")
+
+        for team_name in team_names:
+            team_row = team_rows.setdefault(
+                team_name,
+                {"Matches": 0, "Won": 0, "Lost": 0, "_can_derive_points": True},
+            )
+            team_row["Matches"] += 1
+            result_code = classify_result_code(match, team_name)
+            if result_code == "W":
+                team_row["Won"] += 1
+            elif result_code == "L":
+                team_row["Lost"] += 1
+            else:
+                team_row["_can_derive_points"] = False
+
+            if result_code is not None:
+                team_results[team_name].append((match_time, result_code))
+
+            innings = innings_by_team.get(team_name)
+            opponent_name = next((name for name in team_names if name != team_name), "")
+            opponent_innings = innings_by_team.get(opponent_name)
+            if innings is None or opponent_innings is None:
+                continue
+
+            team_runs = innings.get("total_run")
+            opponent_runs = opponent_innings.get("total_run")
+            team_balls = parse_overs_to_balls(innings.get("overs_played", ""))
+            opponent_balls = parse_overs_to_balls(opponent_innings.get("overs_played", ""))
+            try:
+                team_wickets = int(innings.get("total_wicket"))
+                opponent_wickets = int(opponent_innings.get("total_wicket"))
+                team_runs = int(team_runs)
+                opponent_runs = int(opponent_runs)
+            except (TypeError, ValueError):
+                continue
+
+            if team_balls is None or opponent_balls is None:
+                continue
+            if scheduled_total_balls is not None and team_wickets >= 10:
+                team_balls = scheduled_total_balls
+            if scheduled_total_balls is not None and opponent_wickets >= 10:
+                opponent_balls = scheduled_total_balls
+
+            team_run_rate_totals[team_name]["for_runs"] += team_runs
+            team_run_rate_totals[team_name]["for_balls"] += team_balls
+            team_run_rate_totals[team_name]["against_runs"] += opponent_runs
+            team_run_rate_totals[team_name]["against_balls"] += opponent_balls
+
+    derivations: dict[str, dict[str, object]] = {}
+    for team_name, row in team_rows.items():
+        derived_row: dict[str, object] = {
+            "Matches": row["Matches"],
+            "Won": row["Won"],
+            "Lost": row["Lost"],
+        }
+        if row["_can_derive_points"]:
+            derived_row["Points"] = row["Won"] * 2
+
+        run_rate_totals = team_run_rate_totals.get(team_name)
+        if run_rate_totals and run_rate_totals["for_balls"] > 0 and run_rate_totals["against_balls"] > 0:
+            batting_rr = run_rate_totals["for_runs"] * 6.0 / run_rate_totals["for_balls"]
+            bowling_rr = run_rate_totals["against_runs"] * 6.0 / run_rate_totals["against_balls"]
+            derived_row["Net RR"] = batting_rr - bowling_rr
+            derived_row["For"] = (
+                f"{run_rate_totals['for_runs']}/{format_balls_as_overs(run_rate_totals['for_balls'])}"
+            )
+            derived_row["Against"] = (
+                f"{run_rate_totals['against_runs']}/{format_balls_as_overs(run_rate_totals['against_balls'])}"
+            )
+
+        results = team_results.get(team_name, [])
+        if results:
+            results = sorted(results, key=lambda item: item[0], reverse=True)
+            derived_row["Last 5"] = "-".join(result_code for _, result_code in results[:5])
+
+        derivations[team_name] = derived_row
+
+    return derivations
+
+
+def apply_scorecard_points_overrides(points_df: pd.DataFrame, scorecards_dir: Path) -> pd.DataFrame:
+    derivations = load_scorecard_derivations(scorecards_dir)
+    if not derivations or "Team Name" not in points_df.columns:
+        return points_df
+
+    merged_df = points_df.copy()
+    derived_columns: set[str] = set()
+
+    for row_index, team_name in merged_df["Team Name"].items():
+        team_derivations = derivations.get(str(team_name).strip())
+        if not team_derivations:
+            continue
+        for column_name, derived_value in team_derivations.items():
+            merged_df.at[row_index, column_name] = derived_value
+            derived_columns.add(column_name)
+
+    merged_df.attrs["derived_points_columns"] = sorted(derived_columns)
+    return merged_df
 
 
 def load_figure_config(config_path: Path) -> dict[str, bool]:
@@ -224,6 +438,359 @@ def resolve_wicket_type(row: pd.Series) -> str:
     if dismissal_kind == "out" or "out " in commentary:
         return "out"
     return ""
+
+
+def extract_scorecard_wicket_type(how_to_out: str) -> str:
+    dismissal_text = str(how_to_out).strip().lower()
+    if not dismissal_text or dismissal_text == "not out":
+        return ""
+    if dismissal_text.startswith("run out") or " retired hurt" in dismissal_text:
+        return ""
+    if dismissal_text.startswith("st ") and " b " in dismissal_text:
+        return "stumped"
+    if dismissal_text.startswith("lbw ") and " b " in dismissal_text:
+        return "lbw"
+    if dismissal_text.startswith("hit wkt ") and " b " in dismissal_text:
+        return "hit_wicket"
+    if dismissal_text.startswith("c ") and " b " in dismissal_text:
+        return "caught"
+    if dismissal_text.startswith("b "):
+        return "bowled"
+    return ""
+
+
+def extract_scorecard_bowler_name(how_to_out: str) -> str:
+    dismissal_text = str(how_to_out).strip()
+    if not dismissal_text or dismissal_text.lower() == "not out":
+        return ""
+    if dismissal_text.startswith("b "):
+        return dismissal_text[2:].strip()
+    if " b " not in dismissal_text:
+        return ""
+    return dismissal_text.rsplit(" b ", 1)[-1].strip()
+
+
+def load_scorecard_page_payload(scorecards_dir: Path, prefix: str) -> dict | None:
+    json_path = scorecards_dir / f"{prefix}.json"
+    if json_path.exists():
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            payload = {}
+        scorecard_rows = payload.get("scorecard")
+        if isinstance(scorecard_rows, list) and scorecard_rows:
+            return payload
+
+    html_path = scorecards_dir / f"{prefix}.html"
+    if not html_path.exists():
+        return None
+    try:
+        html_text = html_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = NEXT_DATA_RE.search(html_text)
+    if match is None:
+        return None
+    try:
+        page_payload = json.loads(match.group("payload"))
+    except json.JSONDecodeError:
+        return None
+    page_props = page_payload.get("props", {}).get("pageProps", {})
+    scorecard_rows = page_props.get("scorecard", [])
+    if not isinstance(scorecard_rows, list) or not scorecard_rows:
+        return None
+    summary_data = page_props.get("summaryData", {}).get("data", {})
+    team_a = str(summary_data.get("team_a", {}).get("name", "")).strip()
+    team_b = str(summary_data.get("team_b", {}).get("name", "")).strip()
+    match_title = f"{team_a} vs {team_b}" if team_a and team_b else ""
+    return {"scorecard": scorecard_rows, "match_title": match_title}
+
+
+def load_scorecard_rows(scorecards_dir: Path) -> list[dict]:
+    rows: list[dict] = []
+    for json_path in sorted(scorecards_dir.glob("*.json")):
+        if json_path.name in {"past_matches.json", "tournament_points_table.json"}:
+            continue
+        payload = load_scorecard_page_payload(scorecards_dir, json_path.stem)
+        if payload is None:
+            continue
+        match_title = str(payload.get("match_title", "")).strip()
+        for row in payload.get("scorecard", []):
+            enriched_row = dict(row)
+            if match_title:
+                enriched_row["match_title"] = match_title
+            rows.append(enriched_row)
+    return rows
+
+
+def repair_commentary_match_metadata(df: pd.DataFrame, past_matches_path: Path) -> pd.DataFrame:
+    if df.empty or not past_matches_path.exists():
+        return df
+    try:
+        matches = json.loads(past_matches_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return df
+
+    candidates_by_date: dict[str, list[dict]] = defaultdict(list)
+    for match in matches:
+        match_date = str(match.get("match_start_time", ""))[:10]
+        team_a = str(match.get("team_a", "")).strip()
+        team_b = str(match.get("team_b", "")).strip()
+        if not match_date or not team_a or not team_b:
+            continue
+        candidates_by_date[match_date].append(match)
+
+    repaired = df.copy()
+    unknown_mask = repaired["bowling_team"].eq("Unknown")
+    if not unknown_mask.any():
+        return repaired
+
+    for row_index, row in repaired[unknown_mask].iterrows():
+        match_date = str(row.get("match_date", "")).strip()
+        batting_team = str(row.get("batting_team", "")).strip()
+        if not match_date or not batting_team:
+            continue
+        candidates = [
+            match
+            for match in candidates_by_date.get(match_date, [])
+            if batting_team in {str(match.get("team_a", "")).strip(), str(match.get("team_b", "")).strip()}
+        ]
+        if len(candidates) != 1:
+            continue
+        match = candidates[0]
+        team_a = str(match.get("team_a", "")).strip()
+        team_b = str(match.get("team_b", "")).strip()
+        bowling_team = team_b if batting_team == team_a else team_a
+        repaired.at[row_index, "team_1"] = team_a
+        repaired.at[row_index, "team_2"] = team_b
+        repaired.at[row_index, "bowling_team"] = bowling_team
+        repaired.at[row_index, "match_title"] = f"{team_a} vs {team_b}"
+        repaired.at[row_index, "match_label"] = f"{team_a} vs {team_b} ({match_date})"
+        repaired.at[row_index, "match_key"] = (
+            f"{match_date.replace('-', '_')}_{team_a.lower().replace(' ', '_')}_vs_{team_b.lower().replace(' ', '_')}"
+        )
+
+    return repaired
+
+
+def resolve_scorecard_bowling_team(innings_team: str, match_title: str) -> str:
+    title = str(match_title).strip()
+    if " vs " not in title:
+        return "Unknown"
+    team_1, team_2 = [part.strip() for part in title.split(" vs ", 1)]
+    if innings_team == team_1:
+        return team_2
+    if innings_team == team_2:
+        return team_1
+    return "Unknown"
+
+
+def aggregate_commentary_batting_stats(df: pd.DataFrame) -> pd.DataFrame:
+    batting_events = df[df["extra_type"] != "wide"].copy()
+    grouped = (
+        batting_events.groupby(["batting_team", "batsman"], dropna=False)
+        .agg(
+            runs=("batsman_runs", "sum"),
+            balls=("batsman", "size"),
+            ones=("batsman_runs", lambda s: int((s == 1).sum())),
+            twos=("batsman_runs", lambda s: int((s == 2).sum())),
+            fours=("boundary_type", lambda s: int((s == "FOUR").sum())),
+            sixes=("boundary_type", lambda s: int((s == "SIX").sum())),
+        )
+        .reset_index()
+    )
+    grouped = grouped[grouped["batsman"].ne("")]
+    grouped["ones_runs"] = grouped["ones"]
+    grouped["twos_runs"] = grouped["twos"] * 2
+    grouped["fours_runs"] = grouped["fours"] * 4
+    grouped["sixes_runs"] = grouped["sixes"] * 6
+    grouped["strike_rate"] = grouped.apply(
+        lambda row: row["runs"] / row["balls"] * 100.0 if row["balls"] > 0 else 0.0,
+        axis=1,
+    )
+    return grouped.sort_values(["runs", "strike_rate"], ascending=[False, False])
+
+
+def aggregate_scorecard_batting_leaders(scorecards_dir: Path, commentary_df: pd.DataFrame) -> pd.DataFrame:
+    scorecard_rows = load_scorecard_rows(scorecards_dir)
+    if not scorecard_rows:
+        return aggregate_batting_leaders(commentary_df)
+
+    batting_records: list[dict[str, object]] = []
+    for innings_row in scorecard_rows:
+        batting_team = str(innings_row.get("teamName", "")).strip()
+        for batter in innings_row.get("batting", []) or []:
+            batsman = str(batter.get("name", "")).replace("  (wk)", "").replace("  (c)", "").strip()
+            if not batting_team or not batsman:
+                continue
+            batting_records.append(
+                {
+                    "batting_team": batting_team,
+                    "batsman": batsman,
+                    "runs": int(batter.get("runs", 0) or 0),
+                    "balls": int(batter.get("balls", 0) or 0),
+                    "fours": int(batter.get("4s", 0) or 0),
+                    "sixes": int(batter.get("6s", 0) or 0),
+                }
+            )
+    if not batting_records:
+        return aggregate_batting_leaders(commentary_df)
+
+    scorecard_df = pd.DataFrame(batting_records)
+    grouped = (
+        scorecard_df.groupby(["batting_team", "batsman"], dropna=False)
+        .agg(
+            runs=("runs", "sum"),
+            balls=("balls", "sum"),
+            fours=("fours", "sum"),
+            sixes=("sixes", "sum"),
+        )
+        .reset_index()
+    )
+    grouped["strike_rate"] = grouped.apply(
+        lambda row: row["runs"] / row["balls"] * 100.0 if row["balls"] > 0 else 0.0,
+        axis=1,
+    )
+    grouped["ones"] = 0
+    grouped["twos"] = 0
+    grouped["ones_runs"] = 0
+    grouped["twos_runs"] = 0
+    grouped["fours_runs"] = grouped["fours"] * 4
+    grouped["sixes_runs"] = grouped["sixes"] * 6
+
+    if not commentary_df.empty:
+        commentary_grouped = aggregate_commentary_batting_stats(commentary_df)[
+            ["batting_team", "batsman", "ones", "twos", "ones_runs", "twos_runs"]
+        ]
+        grouped = grouped.merge(commentary_grouped, on=["batting_team", "batsman"], how="left", suffixes=("", "_commentary"))
+        for column in ["ones", "twos", "ones_runs", "twos_runs"]:
+            commentary_column = f"{column}_commentary"
+            grouped[column] = grouped[commentary_column].fillna(grouped[column]).astype(int)
+            grouped = grouped.drop(columns=[commentary_column])
+
+    grouped.attrs["derived_columns"] = ["runs", "balls", "fours", "sixes", "strike_rate"]
+    return grouped.sort_values(["runs", "strike_rate"], ascending=[False, False]).head(5)
+
+
+def overs_value_to_balls(overs: object, balls: object = 0) -> int:
+    overs_text = str(overs).strip()
+    if not overs_text or overs_text.lower() == "nan":
+        return 0
+    parsed = parse_overs_to_balls(overs_text)
+    if parsed is not None:
+        return parsed
+    try:
+        return int(overs) * 6 + int(balls)
+    except (TypeError, ValueError):
+        return 0
+
+
+def aggregate_scorecard_bowling_leaders(scorecards_dir: Path, commentary_df: pd.DataFrame) -> pd.DataFrame:
+    scorecard_rows = load_scorecard_rows(scorecards_dir)
+    if not scorecard_rows:
+        return aggregate_bowling_leaders(commentary_df)
+
+    bowling_records: list[dict[str, object]] = []
+    wicket_type_records: list[dict[str, object]] = []
+    for innings_row in scorecard_rows:
+        batting_team = str(innings_row.get("teamName", "")).strip()
+        for bowling_row in innings_row.get("bowling", []) or []:
+            bowler = str(bowling_row.get("name", "")).replace("  (wk)", "").replace("  (c)", "").strip()
+            if not bowler:
+                continue
+            batting_team = str(innings_row.get("teamName", "")).strip()
+            bowling_records.append(
+                {
+                    "bowling_team": resolve_scorecard_bowling_team(
+                        batting_team, str(innings_row.get("match_title", ""))
+                    ),
+                    "innings_team": batting_team,
+                    "bowler": bowler,
+                    "wickets": int(bowling_row.get("wickets", 0) or 0),
+                    "legal_balls": overs_value_to_balls(bowling_row.get("overs", 0), bowling_row.get("balls", 0)),
+                    "runs_conceded": int(bowling_row.get("runs", 0) or 0),
+                    "extras": int(bowling_row.get("wide", 0) or 0)
+                    + int(bowling_row.get("noball", 0) or 0)
+                    + int(bowling_row.get("extra_run", 0) or 0)
+                    + int(bowling_row.get("bonus_run", 0) or 0),
+                }
+            )
+        for batter in innings_row.get("batting", []) or []:
+            wicket_type = extract_scorecard_wicket_type(batter.get("how_to_out", ""))
+            bowler = extract_scorecard_bowler_name(batter.get("how_to_out", ""))
+            if not wicket_type or not bowler:
+                continue
+            wicket_type_records.append(
+                {
+                    "bowler": bowler.replace("  (wk)", "").replace("  (c)", "").strip(),
+                    "innings_team": batting_team,
+                    "bowling_team": resolve_scorecard_bowling_team(
+                        batting_team, str(innings_row.get("match_title", ""))
+                    ),
+                    "wicket_type": wicket_type,
+                }
+            )
+
+    if not bowling_records:
+        return aggregate_bowling_leaders(commentary_df)
+
+    bowling_df = pd.DataFrame(bowling_records)
+    grouped = (
+        bowling_df.groupby(["bowling_team", "bowler"], dropna=False)
+        .agg(
+            wickets=("wickets", "sum"),
+            legal_balls=("legal_balls", "sum"),
+            runs_conceded=("runs_conceded", "sum"),
+            extras=("extras", "sum"),
+        )
+        .reset_index()
+    )
+
+    wicket_type_df = pd.DataFrame(wicket_type_records)
+    for wicket_type in ["caught", "bowled", "lbw", "stumped", "hit_wicket"]:
+        grouped[wicket_type] = 0
+    if not wicket_type_df.empty:
+        wicket_type_counts = (
+            wicket_type_df.groupby(["bowling_team", "bowler", "wicket_type"], dropna=False)
+            .size()
+            .unstack(fill_value=0)
+            .reset_index()
+        )
+        grouped = grouped.merge(wicket_type_counts, on=["bowling_team", "bowler"], how="left", suffixes=("", "_scorecard"))
+        for wicket_type in ["caught", "bowled", "lbw", "stumped", "hit_wicket"]:
+            scorecard_column = f"{wicket_type}_scorecard"
+            if scorecard_column in grouped.columns:
+                grouped[wicket_type] = grouped[scorecard_column].fillna(grouped[wicket_type]).astype(int)
+                grouped = grouped.drop(columns=[scorecard_column])
+
+    grouped = grouped[grouped["bowler"].ne("")]
+    grouped["overs_bowled"] = grouped["legal_balls"] / 6.0
+    grouped["economy"] = grouped.apply(
+        lambda row: row["runs_conceded"] / row["overs_bowled"] if row["overs_bowled"] > 0 else 0.0,
+        axis=1,
+    )
+    grouped["bowling_strike_rate"] = grouped.apply(
+        lambda row: row["legal_balls"] / row["wickets"] if row["wickets"] > 0 else None,
+        axis=1,
+    )
+    grouped["bowling_average"] = grouped.apply(
+        lambda row: row["runs_conceded"] / row["wickets"] if row["wickets"] > 0 else None,
+        axis=1,
+    )
+    grouped.attrs["derived_columns"] = [
+        "wickets",
+        "caught",
+        "bowled",
+        "stumped",
+        "hit_wicket",
+        "overs_bowled",
+        "runs_conceded",
+        "extras",
+        "economy",
+        "bowling_strike_rate",
+        "bowling_average",
+    ]
+    return grouped.sort_values(["wickets", "economy", "runs_conceded"], ascending=[False, True, True]).head(5)
 
 
 def aggregate_bowler_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -520,18 +1087,19 @@ def build_top_batting_table_component(top_batting_df: pd.DataFrame) -> dash_tabl
             "strike_rate": top_batting_df.get("strike_rate", pd.Series(dtype=float)).round(2),
         }
     )
+    derived_columns = set(top_batting_df.attrs.get("derived_columns", []))
     return dash_table.DataTable(
         id="top-batting-table",
         columns=[
             {"name": ["Identity", "Team"], "id": "batting_team"},
             {"name": ["Identity", "Batsman"], "id": "batsman"},
-            {"name": ["Output", "Runs"], "id": "runs"},
-            {"name": ["Output", "Balls"], "id": "balls"},
+            {"name": ["Output", "Runs*" if "runs" in derived_columns else "Runs"], "id": "runs"},
+            {"name": ["Output", "Balls*" if "balls" in derived_columns else "Balls"], "id": "balls"},
             {"name": ["Scoring Shots", "1s"], "id": "ones"},
             {"name": ["Scoring Shots", "2s"], "id": "twos"},
-            {"name": ["Scoring Shots", "4s"], "id": "fours"},
-            {"name": ["Scoring Shots", "6s"], "id": "sixes"},
-            {"name": ["Rates", "SR"], "id": "strike_rate"},
+            {"name": ["Scoring Shots", "4s*" if "fours" in derived_columns else "4s"], "id": "fours"},
+            {"name": ["Scoring Shots", "6s*" if "sixes" in derived_columns else "6s"], "id": "sixes"},
+            {"name": ["Rates", "SR*" if "strike_rate" in derived_columns else "SR"], "id": "strike_rate"},
         ],
         data=display_df.to_dict("records"),
         merge_duplicate_headers=True,
@@ -539,6 +1107,17 @@ def build_top_batting_table_component(top_batting_df: pd.DataFrame) -> dash_tabl
         style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
         style_header={"fontWeight": "bold", "textAlign": "center"},
         style_data={"whiteSpace": "normal", "height": "auto"},
+    )
+
+
+def build_top_batting_footnote(top_batting_df: pd.DataFrame) -> html.P:
+    derived_columns = top_batting_df.attrs.get("derived_columns", [])
+    if not derived_columns:
+        return html.P("")
+    return html.P(
+        "* Runs, Balls, 4s, 6s, and SR are derived from scorecard batting rows when available. "
+        "1s and 2s remain commentary-derived.",
+        style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 
 
@@ -558,15 +1137,31 @@ def build_points_table_component(points_df: pd.DataFrame) -> dash_table.DataTabl
     display_df = points_df[available_columns].copy() if available_columns else pd.DataFrame()
     if "Net RR" in display_df.columns:
         display_df["Net RR"] = display_df["Net RR"].round(3)
+    derived_columns = set(points_df.attrs.get("derived_points_columns", []))
 
     return dash_table.DataTable(
         id="points-table-table",
-        columns=[{"name": column, "id": column} for column in display_df.columns],
+        columns=[
+            {"name": f"{column}*" if column in derived_columns else column, "id": column}
+            for column in display_df.columns
+        ],
         data=display_df.to_dict("records"),
         style_table={"overflowX": "auto"},
         style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
         style_header={"fontWeight": "bold", "textAlign": "center"},
         style_data={"whiteSpace": "normal", "height": "auto"},
+    )
+
+
+def build_points_table_footnote(points_df: pd.DataFrame) -> html.P:
+    derived_columns = points_df.attrs.get("derived_points_columns", [])
+    if not derived_columns:
+        return html.P("")
+    derived_column_labels = ", ".join(column for column in derived_columns if column != "Team Name")
+    return html.P(
+        f"* Derived from local scorecard match metadata and innings summaries when available: "
+        f"{derived_column_labels}. Columns without * remain from the tournament points-table payload.",
+        style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 
 
@@ -677,22 +1272,23 @@ def build_top_bowling_table_component(top_bowling_df: pd.DataFrame) -> dash_tabl
             "bowling_average": top_bowling_df.get("bowling_average", pd.Series(dtype=float)).round(2),
         }
     )
+    derived_columns = set(top_bowling_df.attrs.get("derived_columns", []))
     return dash_table.DataTable(
         id="top-bowling-table",
         columns=[
             {"name": ["Identity", "Team"], "id": "bowling_team"},
             {"name": ["Identity", "Bowler"], "id": "bowler"},
-            {"name": ["Wickets", "Total"], "id": "wickets"},
-            {"name": ["Wicket Types", "Caught"], "id": "caught"},
-            {"name": ["Wicket Types", "Bowled"], "id": "bowled"},
-            {"name": ["Wicket Types", "Stumped"], "id": "stumped"},
-            {"name": ["Wicket Types", "Hit wicket"], "id": "hit_wicket"},
-            {"name": ["Workload", "Overs"], "id": "overs_bowled"},
-            {"name": ["Runs", "Conceded"], "id": "runs_conceded"},
-            {"name": ["Runs", "Extras"], "id": "extras"},
-            {"name": ["Rates", "Economy"], "id": "economy"},
-            {"name": ["Rates", "SR"], "id": "bowling_strike_rate"},
-            {"name": ["Rates", "Avg"], "id": "bowling_average"},
+            {"name": ["Wickets", "Total*" if "wickets" in derived_columns else "Total"], "id": "wickets"},
+            {"name": ["Wicket Types", "Caught*" if "caught" in derived_columns else "Caught"], "id": "caught"},
+            {"name": ["Wicket Types", "Bowled*" if "bowled" in derived_columns else "Bowled"], "id": "bowled"},
+            {"name": ["Wicket Types", "Stumped*" if "stumped" in derived_columns else "Stumped"], "id": "stumped"},
+            {"name": ["Wicket Types", "Hit wicket*" if "hit_wicket" in derived_columns else "Hit wicket"], "id": "hit_wicket"},
+            {"name": ["Workload", "Overs*" if "overs_bowled" in derived_columns else "Overs"], "id": "overs_bowled"},
+            {"name": ["Runs", "Conceded*" if "runs_conceded" in derived_columns else "Conceded"], "id": "runs_conceded"},
+            {"name": ["Runs", "Extras*" if "extras" in derived_columns else "Extras"], "id": "extras"},
+            {"name": ["Rates", "Economy*" if "economy" in derived_columns else "Economy"], "id": "economy"},
+            {"name": ["Rates", "SR*" if "bowling_strike_rate" in derived_columns else "SR"], "id": "bowling_strike_rate"},
+            {"name": ["Rates", "Avg*" if "bowling_average" in derived_columns else "Avg"], "id": "bowling_average"},
         ],
         data=display_df.to_dict("records"),
         merge_duplicate_headers=True,
@@ -700,6 +1296,17 @@ def build_top_bowling_table_component(top_bowling_df: pd.DataFrame) -> dash_tabl
         style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
         style_header={"fontWeight": "bold", "textAlign": "center"},
         style_data={"whiteSpace": "normal", "height": "auto"},
+    )
+
+
+def build_top_bowling_footnote(top_bowling_df: pd.DataFrame) -> html.P:
+    derived_columns = top_bowling_df.attrs.get("derived_columns", [])
+    if not derived_columns:
+        return html.P("")
+    return html.P(
+        "* Wickets, wicket types, overs, runs conceded, extras, economy, SR, and Avg are derived from "
+        "scorecard bowling rows and batting dismissal text when available.",
+        style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 
 
@@ -743,18 +1350,31 @@ def ordered_team_labels(df: pd.DataFrame) -> list[str]:
 
 
 def build_points_table_components(
-    points_df: pd.DataFrame, commentary_df: pd.DataFrame
-) -> tuple[dash_table.DataTable, dash_table.DataTable, dash_table.DataTable, go.Figure, go.Figure]:
+    points_df: pd.DataFrame, commentary_df: pd.DataFrame, scorecards_dir: Path | None = None
+) -> tuple[dash_table.DataTable, html.P, dash_table.DataTable, html.P, dash_table.DataTable, html.P, go.Figure, go.Figure]:
     if points_df.empty:
         empty_points_table = build_points_table_component(pd.DataFrame())
+        empty_points_footnote = build_points_table_footnote(pd.DataFrame())
         empty_batting_table = build_top_batting_table_component(pd.DataFrame())
+        empty_batting_footnote = build_top_batting_footnote(pd.DataFrame())
         empty_table = build_top_bowling_table_component(pd.DataFrame())
+        empty_bowling_footnote = build_top_bowling_footnote(pd.DataFrame())
         empty_figure_component = empty_figure("Tournament Points Table")
-        return empty_points_table, empty_batting_table, empty_table, empty_figure_component, empty_figure_component
+        return (
+            empty_points_table,
+            empty_points_footnote,
+            empty_batting_table,
+            empty_batting_footnote,
+            empty_table,
+            empty_bowling_footnote,
+            empty_figure_component,
+            empty_figure_component,
+        )
 
     points_table_component = build_points_table_component(points_df)
+    points_table_footnote = build_points_table_footnote(points_df)
 
-    if commentary_df.empty:
+    if commentary_df.empty and scorecards_dir is None:
         top_batting_df = pd.DataFrame(
             columns=[
                 "batting_team",
@@ -790,25 +1410,34 @@ def build_points_table_components(
             ]
         )
     else:
-        top_batting_df = aggregate_batting_leaders(commentary_df)
-        top_bowling_df = aggregate_bowling_leaders(commentary_df)
+        if scorecards_dir is not None:
+            top_batting_df = aggregate_scorecard_batting_leaders(scorecards_dir, commentary_df)
+            top_bowling_df = aggregate_scorecard_bowling_leaders(scorecards_dir, commentary_df)
+        else:
+            top_batting_df = aggregate_batting_leaders(commentary_df)
+            top_bowling_df = aggregate_bowling_leaders(commentary_df)
 
     batting_table_component = build_top_batting_table_component(top_batting_df)
+    batting_table_footnote = build_top_batting_footnote(top_batting_df)
     top_batter_scoring_types_fig = build_top_batter_scoring_types_figure(top_batting_df)
     bowling_table_component = build_top_bowling_table_component(top_bowling_df)
+    bowling_table_footnote = build_top_bowling_footnote(top_bowling_df)
     top_bowler_wicket_types_fig = build_top_bowler_wicket_types_figure(top_bowling_df)
 
     return (
         points_table_component,
+        points_table_footnote,
         batting_table_component,
+        batting_table_footnote,
         bowling_table_component,
+        bowling_table_footnote,
         top_batter_scoring_types_fig,
         top_bowler_wicket_types_fig,
     )
 
 
 def build_app(
-    df: pd.DataFrame, points_df: pd.DataFrame, figure_config: dict[str, bool]
+    df: pd.DataFrame, points_df: pd.DataFrame, figure_config: dict[str, bool], scorecards_dir: Path | None = None
 ) -> dash.Dash:
     app = dash.Dash(__name__)
     match_options = [{"label": "All matches", "value": "ALL"}]
@@ -824,8 +1453,8 @@ def build_app(
             )
         )
 
-    points_table_component, top_batting_table, top_bowling_table, top_batter_scoring_types_fig, top_bowler_wicket_types_fig = (
-        build_points_table_components(points_df, df)
+    points_table_component, points_table_footnote, top_batting_table, top_batting_footnote, top_bowling_table, top_bowling_footnote, top_batter_scoring_types_fig, top_bowler_wicket_types_fig = (
+        build_points_table_components(points_df, df, scorecards_dir)
     )
 
     app.layout = html.Div(
@@ -938,6 +1567,7 @@ def build_app(
                                 [
                                     html.H2("Tournament Points Table"),
                                     points_table_component,
+                                    points_table_footnote,
                                 ],
                                 style=component_style(figure_config["points_table_table"]),
                             ),
@@ -945,6 +1575,7 @@ def build_app(
                                 [
                                     html.H2("Top 5 Batting Performances"),
                                     top_batting_table,
+                                    top_batting_footnote,
                                 ],
                                 style=component_style(figure_config["top_batting_table"]),
                             ),
@@ -952,6 +1583,7 @@ def build_app(
                                 [
                                     html.H2("Top 5 Bowling Performances"),
                                     top_bowling_table,
+                                    top_bowling_footnote,
                                 ],
                                 style=component_style(figure_config["top_bowling_table"]),
                             ),
@@ -1265,7 +1897,7 @@ def create_dash_app(
     df = load_commentary_data(input_dir)
     points_df = load_points_table(points_table_path)
     figure_config = load_figure_config(figure_config_path)
-    return build_app(df, points_df, figure_config)
+    return build_app(df, points_df, figure_config, points_table_path.parent)
 
 
 def main() -> int:
