@@ -1092,7 +1092,7 @@ def build_top_batting_table_component(top_batting_df: pd.DataFrame) -> dash_tabl
         id="top-batting-table",
         columns=[
             {"name": ["Identity", "Team"], "id": "batting_team"},
-            {"name": ["Identity", "Batsman"], "id": "batsman"},
+            {"name": ["Identity", "Batter"], "id": "batsman"},
             {"name": ["Output", "Runs*" if "runs" in derived_columns else "Runs"], "id": "runs"},
             {"name": ["Output", "Balls*" if "balls" in derived_columns else "Balls"], "id": "balls"},
             {"name": ["Scoring Shots", "1s"], "id": "ones"},
@@ -1115,8 +1115,7 @@ def build_top_batting_footnote(top_batting_df: pd.DataFrame) -> html.P:
     if not derived_columns:
         return html.P("")
     return html.P(
-        "* Runs, Balls, 4s, 6s, and SR are derived from scorecard batting rows when available. "
-        "1s and 2s remain commentary-derived.",
+        "Accurate - Derived from scorecards. without * are very close but need not be exact",
         style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 
@@ -1157,10 +1156,8 @@ def build_points_table_footnote(points_df: pd.DataFrame) -> html.P:
     derived_columns = points_df.attrs.get("derived_points_columns", [])
     if not derived_columns:
         return html.P("")
-    derived_column_labels = ", ".join(column for column in derived_columns if column != "Team Name")
     return html.P(
-        f"* Derived from local scorecard match metadata and innings summaries when available: "
-        f"{derived_column_labels}. Columns without * remain from the tournament points-table payload.",
+        "Accurate - Derived from scorecards. without * are very close but need not be exact",
         style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 
@@ -1205,7 +1202,7 @@ def build_top_batter_scoring_types_figure(top_batting_df: pd.DataFrame) -> go.Fi
         custom_data=["runs"],
     )
     figure.update_layout(
-        xaxis_title="Batsman",
+        xaxis_title="Batter",
         yaxis_title="Contribution (%)",
         legend_title_text="Scoring type",
     )
@@ -1304,8 +1301,7 @@ def build_top_bowling_footnote(top_bowling_df: pd.DataFrame) -> html.P:
     if not derived_columns:
         return html.P("")
     return html.P(
-        "* Wickets, wicket types, overs, runs conceded, extras, economy, SR, and Avg are derived from "
-        "scorecard bowling rows and batting dismissal text when available.",
+        "Accurate - Derived from scorecards. without * are very close but need not be exact",
         style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 

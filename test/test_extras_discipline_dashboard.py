@@ -276,7 +276,7 @@ def test_build_points_table_components_uses_grouped_bowling_headers() -> None:
     assert batting_table_component.merge_duplicate_headers is True
     assert batting_table_component.columns[:5] == [
         {"name": ["Identity", "Team"], "id": "batting_team"},
-        {"name": ["Identity", "Batsman"], "id": "batsman"},
+        {"name": ["Identity", "Batter"], "id": "batsman"},
         {"name": ["Output", "Runs"], "id": "runs"},
         {"name": ["Output", "Balls"], "id": "balls"},
         {"name": ["Scoring Shots", "1s"], "id": "ones"},

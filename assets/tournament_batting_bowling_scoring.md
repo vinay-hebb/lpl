@@ -29,6 +29,33 @@ In that setup, each component should already be defined inside $[0, 1]$, and the
 
 ## Notation
 
+Symbols used below:
+
+- $\operatorname{norm}(x; x_{\min}, x_{\max})$: min-max normalization that maps $x$ into $[0, 1]$
+- $x_{\min}, x_{\max}$: lower and upper normalization bounds for a generic quantity $x$
+- $w_k$: non-negative weight for component $k$, with all weights summing to $1$
+- $R^*, W^*, B^*, C^*, BOWLED^*, LBW^*, ST^*, HW^*, O^*$: normalized versions of runs, wickets, boundary contribution, caught wickets, bowled wickets, lbw wickets, stumped wickets, hit-wicket dismissals, and overs/workload respectively
+- $\text{SR}$: batter strike rate
+- $\text{TeamSR}$: team strike rate for the same innings
+- $\Delta \text{SR}$: strike-rate advantage over the team rate, defined as $\max(0, \text{SR} - \text{TeamSR})$
+- $\Delta \text{SR}_{\max}$: upper bound used to normalize $\Delta \text{SR}$
+- $\text{ParAdjustment}$: adjustment based on how the innings compares with par conditions
+- $PAR_{\min}, PAR_{\max}$: normalization bounds for par adjustment
+- $\text{ContextAdjustment}$: adjustment for match situation, pressure, or batting context
+- $CTX_{\min}, CTX_{\max}$: normalization bounds for context adjustment
+- $\text{Economy}$: bowling economy rate
+- $ECO_{\min}, ECO_{\max}$: normalization bounds for economy
+- $\text{BowlingSR}$: bowling strike rate
+- $BSR_{\min}, BSR_{\max}$: normalization bounds for bowling strike rate
+- $\text{WicketStrength}$: quality score assigned to the dismissed batter or wicket taken
+- $WKS_{\min}, WKS_{\max}$: normalization bounds for wicket strength
+- $M$: maiden overs
+- $M_{\min}, M_{\max}$: normalization bounds for maiden overs
+- $\text{HaulBonus}$: bonus term for larger wicket hauls
+- $HAUL_{\min}, HAUL_{\max}$: normalization bounds for wicket-haul bonus
+- Superscript $^*$: normalized/scaled form of a metric
+- Subscript $_{inv}$: inverse-normalized form, where lower raw values produce higher scores
+
 $$
 \Delta \text{SR}^* = \operatorname{norm}(\max(0, \text{SR} - \text{TeamSR}); 0, \Delta \text{SR}_{\max})
 $$
