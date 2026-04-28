@@ -23,6 +23,100 @@ $$
 
 In practice, $x_{\min}$ and $x_{\max}$ can be chosen from tournament-level observed values or from fixed cricket-specific caps.
 
+## Notation
+
+$$
+R^* = \operatorname{norm}(R; R_{\min}, R_{\max})
+$$
+
+$$
+B^* = \operatorname{norm}(B; B_{\min}, B_{\max})
+$$
+
+$$
+SR^* = \operatorname{norm}(\text{SR}; \text{SR}_{\min}, \text{SR}_{\max})
+$$
+
+$$
+\Delta \text{SR}^* = \operatorname{norm}(\max(0, \text{SR} - \text{TeamSR}); 0, \Delta \text{SR}_{\max})
+$$
+
+$$
+PAR^* = \operatorname{norm}(\text{ParAdjustment}; PAR_{\min}, PAR_{\max})
+$$
+
+$$
+CONTEXT^* = \operatorname{norm}(\text{ContextAdjustment}; CTX_{\min}, CTX_{\max})
+$$
+
+$$
+W^* = \operatorname{norm}(W; W_{\min}, W_{\max})
+$$
+
+$$
+C^* = \operatorname{norm}(C; C_{\min}, C_{\max})
+$$
+
+$$
+BOWLED^* = \operatorname{norm}(BOWLED; BOWLED_{\min}, BOWLED_{\max})
+$$
+
+$$
+LBW^* = \operatorname{norm}(LBW; LBW_{\min}, LBW_{\max})
+$$
+
+$$
+ST^* = \operatorname{norm}(ST; ST_{\min}, ST_{\max})
+$$
+
+$$
+HW^* = \operatorname{norm}(HW; HW_{\min}, HW_{\max})
+$$
+
+$$
+ECO^*_{inv} = 1 - \operatorname{norm}(\text{Economy}; ECO_{\min}, ECO_{\max})
+$$
+
+$$
+SR^*_{inv} = 1 - \operatorname{norm}(\text{BowlingSR}; BSR_{\min}, BSR_{\max})
+$$
+
+$$
+O^* = \operatorname{norm}(O; O_{\min}, O_{\max})
+$$
+
+$$
+WKSTRENGTH^* = \operatorname{norm}(\text{WicketStrength}; WKS_{\min}, WKS_{\max})
+$$
+
+$$
+MAIDEN^* = \operatorname{norm}(M; M_{\min}, M_{\max})
+$$
+
+$$
+HAUL^* = \operatorname{norm}(\text{HaulBonus}; HAUL_{\min}, HAUL_{\max})
+$$
+
+## Batting score options
+
+| Option | Description |
+| --- | --- |
+| 1. Simple runs-only | $S = \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right)$. Easiest to explain, but ignores tempo and innings context. |
+| 2. Runs plus strike rate gate | $S = \operatorname{clip01}\left(w_r \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right) + w_{sr}\operatorname{norm}\left(\sum_i \max(0, \text{SR}_i - \text{TeamSR}_i); 0, \Delta \text{SR}_{\max}\right)\right)$. Good low-complexity option and close to the current baseline. |
+| 3. Weighted batting impact | $S = \operatorname{clip01}\left(w_r R^* + w_{sr}\Delta \text{SR}^* + w_b B^*\right)$ where each starred term is separately normalized to $[0,1]$. Lets you reward volume and tempo separately. |
+| 4. Full MVP-style batting | $S = \operatorname{clip01}\left(w_r R^* + w_{sr} SR^* + w_{par} PAR^* + w_{ctx} CONTEXT^*\right)$. Strongest model, but it needs richer batting-order and situation data.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
+
+## Bowling score options
+
+| Option | Description |
+| --- | --- |
+| 1. Simple wickets-only | $S = \operatorname{norm}\left(\sum_i W_i; 0, W_{\max}\right)$. Easiest option, but it ignores spell quality and wicket context. |
+| 2. Wickets plus economy | $S = \operatorname{clip01}\left(w_w W^* + w_e ECO^*_{inv}\right)$ where $W^*$ is normalized wickets and $ECO^*_{inv}$ is inverse-normalized economy. Good compact baseline if you want reward and control together. |
+| 3. Wicket-type weighted bowling | $S = \operatorname{clip01}\left(w_c C^* + w_b BOWLED^* + w_l LBW^* + w_s ST^* + w_h HW^*\right)$ where wicket-type counts are normalized independently. Useful when dismissal mode is considered informative. |
+| 4. Workload-adjusted bowling | $S = \operatorname{clip01}\left(w_w W^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_o O^*\right)$. Better when you want to reward both usage and efficiency. |
+| 5. Batter-strength bowling | $S = \operatorname{clip01}\left(w_{wk} WKSTRENGTH^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv}\right)$. This is close to the current baseline. |
+| 6. Full MVP-style bowling | $S = \operatorname{clip01}\left(w_{wk} WKSTRENGTH^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_m MAIDEN^* + w_h HAUL^*\right)$. Highest signal, but also the most assumption-heavy.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
+
 ## Current batting baseline
 
 For each batting innings $i$:
@@ -128,26 +222,6 @@ Where:
 - $TRC_i$: total runs conceded by the bowling team in that innings
 - $TLB_i$: total legal balls in that innings
 - $M_i$: maiden overs by that bowler in that innings
-
-## Batting score options
-
-| Option | Description |
-| --- | --- |
-| 1. Simple runs-only | $S = \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right)$. Easiest to explain, but ignores tempo and innings context. |
-| 2. Runs plus strike rate gate | $S = \operatorname{clip01}\left(w_r \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right) + w_{sr}\operatorname{norm}\left(\sum_i \max(0, \text{SR}_i - \text{TeamSR}_i); 0, \Delta \text{SR}_{\max}\right)\right)$. Good low-complexity option and close to the current baseline. |
-| 3. Weighted batting impact | $S = \operatorname{clip01}\left(w_r R^* + w_{sr}\Delta \text{SR}^* + w_b B^*\right)$ where each starred term is separately normalized to $[0,1]$. Lets you reward volume and tempo separately. |
-| 4. Full MVP-style batting | $S = \operatorname{clip01}\left(w_r R^* + w_{sr} SR^* + w_{par} PAR^* + w_{ctx} CONTEXT^*\right)$. Strongest model, but it needs richer batting-order and situation data.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
-
-## Bowling score options
-
-| Option | Description |
-| --- | --- |
-| 1. Simple wickets-only | $S = \operatorname{norm}\left(\sum_i W_i; 0, W_{\max}\right)$. Easiest option, but it ignores spell quality and wicket context. |
-| 2. Wickets plus economy | $S = \operatorname{clip01}\left(w_w W^* + w_e ECO^*_{inv}\right)$ where $W^*$ is normalized wickets and $ECO^*_{inv}$ is inverse-normalized economy. Good compact baseline if you want reward and control together. |
-| 3. Wicket-type weighted bowling | $S = \operatorname{clip01}\left(w_c C^* + w_b B^* + w_l LBW^* + w_s ST^* + w_h HW^*\right)$ where wicket-type counts are normalized independently. Useful when dismissal mode is considered informative. |
-| 4. Workload-adjusted bowling | $S = \operatorname{clip01}\left(w_w W^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_o O^*\right)$. Better when you want to reward both usage and efficiency. |
-| 5. Batter-strength bowling | $S = \operatorname{clip01}\left(w_{wk} WKSTRENGTH^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv}\right)$. This is close to the current baseline. |
-| 6. Full MVP-style bowling | $S = \operatorname{clip01}\left(w_{wk} WKSTRENGTH^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_m MAIDEN^* + w_h HAUL^*\right)$. Highest signal, but also the most assumption-heavy.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
 
 ## Recommended use
 
