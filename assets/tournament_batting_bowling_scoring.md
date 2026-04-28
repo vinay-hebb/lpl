@@ -14,28 +14,20 @@ This note defines the current tournament-wide batting and bowling scoring baseli
 All option formulas below are written as scores in the range $[0, 1]$.
 
 $$
-\operatorname{clip01}(x) = \max(0, \min(1, x))
-$$
-
-$$
-\operatorname{norm}(x; x_{\min}, x_{\max}) = \operatorname{clip01}\left(\frac{x - x_{\min}}{x_{\max} - x_{\min}}\right)
+\operatorname{norm}(x; x_{\min}, x_{\max}) = \frac{x - x_{\min}}{x_{\max} - x_{\min}}
 $$
 
 In practice, $x_{\min}$ and $x_{\max}$ can be chosen from tournament-level observed values or from fixed cricket-specific caps.
 
+For weighted combinations, choose coefficients so that they sum to $1$:
+
+$$
+\sum_k w_k = 1, \qquad w_k \ge 0
+$$
+
+In that setup, each component should already be defined inside $[0, 1]$, and the final score can then be formed as a convex combination without any extra clipping.
+
 ## Notation
-
-$$
-R^* = \operatorname{norm}(R; R_{\min}, R_{\max})
-$$
-
-$$
-B^* = \operatorname{norm}(B; B_{\min}, B_{\max})
-$$
-
-$$
-SR^* = \operatorname{norm}(\text{SR}; \text{SR}_{\min}, \text{SR}_{\max})
-$$
 
 $$
 \Delta \text{SR}^* = \operatorname{norm}(\max(0, \text{SR} - \text{TeamSR}); 0, \Delta \text{SR}_{\max})
@@ -50,39 +42,11 @@ CONTEXT^* = \operatorname{norm}(\text{ContextAdjustment}; CTX_{\min}, CTX_{\max}
 $$
 
 $$
-W^* = \operatorname{norm}(W; W_{\min}, W_{\max})
-$$
-
-$$
-C^* = \operatorname{norm}(C; C_{\min}, C_{\max})
-$$
-
-$$
-BOWLED^* = \operatorname{norm}(BOWLED; BOWLED_{\min}, BOWLED_{\max})
-$$
-
-$$
-LBW^* = \operatorname{norm}(LBW; LBW_{\min}, LBW_{\max})
-$$
-
-$$
-ST^* = \operatorname{norm}(ST; ST_{\min}, ST_{\max})
-$$
-
-$$
-HW^* = \operatorname{norm}(HW; HW_{\min}, HW_{\max})
-$$
-
-$$
 ECO^*_{inv} = 1 - \operatorname{norm}(\text{Economy}; ECO_{\min}, ECO_{\max})
 $$
 
 $$
 SR^*_{inv} = 1 - \operatorname{norm}(\text{BowlingSR}; BSR_{\min}, BSR_{\max})
-$$
-
-$$
-O^* = \operatorname{norm}(O; O_{\min}, O_{\max})
 $$
 
 $$
@@ -102,20 +66,20 @@ $$
 | Option | Description |
 | --- | --- |
 | 1. Simple runs-only | $S = \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right)$. Easiest to explain, but ignores tempo and innings context. |
-| 2. Runs plus strike rate gate | $S = \operatorname{clip01}\left(w_r \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right) + w_{sr}\operatorname{norm}\left(\sum_i \max(0, \text{SR}_i - \text{TeamSR}_i); 0, \Delta \text{SR}_{\max}\right)\right)$. Good low-complexity option and close to the current baseline. |
-| 3. Weighted batting impact | $S = \operatorname{clip01}\left(w_r R^* + w_{sr}\Delta \text{SR}^* + w_b B^*\right)$ where each starred term is separately normalized to $[0,1]$. Lets you reward volume and tempo separately. |
-| 4. Full MVP-style batting | $S = \operatorname{clip01}\left(w_r R^* + w_{sr} SR^* + w_{par} PAR^* + w_{ctx} CONTEXT^*\right)$. Strongest model, but it needs richer batting-order and situation data.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
+| 2. Runs plus strike rate gate | $S = w_r \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right) + w_{sr}\operatorname{norm}\left(\sum_i \max(0, \text{SR}_i - \text{TeamSR}_i); 0, \Delta \text{SR}_{\max}\right)$ with $w_r + w_{sr} = 1$. Good low-complexity option and close to the current baseline. |
+| 3. Weighted batting impact | $S = w_r R^* + w_{sr}\Delta \text{SR}^* + w_b B^*$ with $w_r + w_{sr} + w_b = 1$, where each starred term is separately normalized to $[0,1]$. Lets you reward volume and tempo separately. |
+| 4. Full MVP-style batting | $S = w_r R^* + w_{sr} SR^* + w_{par} PAR^* + w_{ctx} CONTEXT^*$ with $w_r + w_{sr} + w_{par} + w_{ctx} = 1$. Strongest model, but it needs richer batting-order and situation data.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
 
 ## Bowling score options
 
 | Option | Description |
 | --- | --- |
 | 1. Simple wickets-only | $S = \operatorname{norm}\left(\sum_i W_i; 0, W_{\max}\right)$. Easiest option, but it ignores spell quality and wicket context. |
-| 2. Wickets plus economy | $S = \operatorname{clip01}\left(w_w W^* + w_e ECO^*_{inv}\right)$ where $W^*$ is normalized wickets and $ECO^*_{inv}$ is inverse-normalized economy. Good compact baseline if you want reward and control together. |
-| 3. Wicket-type weighted bowling | $S = \operatorname{clip01}\left(w_c C^* + w_b BOWLED^* + w_l LBW^* + w_s ST^* + w_h HW^*\right)$ where wicket-type counts are normalized independently. Useful when dismissal mode is considered informative. |
-| 4. Workload-adjusted bowling | $S = \operatorname{clip01}\left(w_w W^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_o O^*\right)$. Better when you want to reward both usage and efficiency. |
-| 5. Batter-strength bowling | $S = \operatorname{clip01}\left(w_{wk} WKSTRENGTH^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv}\right)$. This is close to the current baseline. |
-| 6. Full MVP-style bowling | $S = \operatorname{clip01}\left(w_{wk} WKSTRENGTH^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_m MAIDEN^* + w_h HAUL^*\right)$. Highest signal, but also the most assumption-heavy.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
+| 2. Wickets plus economy | $S = w_w W^* + w_e ECO^*_{inv}$ with $w_w + w_e = 1$, where $W^*$ is normalized wickets and $ECO^*_{inv}$ is inverse-normalized economy. Good compact baseline if you want reward and control together. |
+| 3. Wicket-type weighted bowling | $S = w_c C^* + w_b BOWLED^* + w_l LBW^* + w_s ST^* + w_h HW^*$ with $w_c + w_b + w_l + w_s + w_h = 1$, where wicket-type counts are normalized independently. Useful when dismissal mode is considered informative. |
+| 4. Workload-adjusted bowling | $S = w_w W^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_o O^*$ with $w_w + w_e + w_{sr} + w_o = 1$. Better when you want to reward both usage and efficiency. |
+| 5. Batter-strength bowling | $S = w_{wk} WKSTRENGTH^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv}$ with $w_{wk} + w_e + w_{sr} = 1$. This is close to the current baseline. |
+| 6. Full MVP-style bowling | $S = w_{wk} WKSTRENGTH^* + w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_m MAIDEN^* + w_h HAUL^*$ with $w_{wk} + w_e + w_{sr} + w_m + w_h = 1$. Highest signal, but also the most assumption-heavy.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
 
 ## Current batting baseline
 
