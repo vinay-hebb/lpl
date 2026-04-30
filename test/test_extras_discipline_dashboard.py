@@ -1092,5 +1092,5 @@ def test_export_configurable_scoring_workbook_creates_formula_driven_top5(tmp_pa
     assert workbook["BattingInnings"]["G2"].value == "=IF(F2=0,0,E2/F2*100)"
     assert workbook["BattingInnings"]["N2"].value.startswith("=Inputs!$B$2*L2+Inputs!$B$3*M2")
     assert workbook["CombinedScores"]["C2"].value.startswith("=SUMIFS(BattingSummary!$F$2:")
-    assert workbook["CombinedScores"]["L2"].value.startswith("=RANK.EQ(")
+    assert workbook["CombinedScores"]["L2"].value.startswith("=RANK(")
     assert workbook["Top5"]["B2"].value.startswith("=IFERROR(INDEX(CombinedScores!")

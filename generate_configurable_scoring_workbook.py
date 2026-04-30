@@ -375,7 +375,7 @@ def export_configurable_scoring_workbook(
             )
             combined_ws[f"K{row_index}"] = f'=(F{row_index}+J{row_index})/2'
             combined_ws[f"L{row_index}"] = (
-                f'=RANK.EQ(K{row_index},$K${combined_start}:$K${combined_end},0)+COUNTIF($K${combined_start}:K{row_index},K{row_index})-1'
+                f'=RANK(K{row_index},$K${combined_start}:$K${combined_end},0)+COUNTIF($K${combined_start}:K{row_index},K{row_index})-1'
             )
 
     top5_ws = workbook.create_sheet("Top5")
