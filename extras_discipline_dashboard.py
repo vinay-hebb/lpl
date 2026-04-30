@@ -26,8 +26,6 @@ NEXT_DATA_RE = re.compile(
 APP_VERSION = "0.4.0"
 LAST_UPDATED = "2026-04-28 19:45 IST"
 VERSION_LOG_HREF = "/assets/version_log.md"
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a Dash app for commentary analytics and tournament points table."
@@ -521,6 +519,37 @@ def load_scorecard_rows(scorecards_dir: Path) -> list[dict]:
                 enriched_row["match_title"] = match_title
             rows.append(enriched_row)
     return rows
+
+
+def load_scorecard_match_lookup(scorecards_dir: Path) -> dict[int, dict[str, str]]:
+    past_matches_path = scorecards_dir / "past_matches.json"
+    if not past_matches_path.exists():
+        return {}
+    try:
+        matches = json.loads(past_matches_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    lookup: dict[int, dict[str, str]] = {}
+    for match in matches:
+        try:
+            match_id = int(match.get("match_id"))
+        except (TypeError, ValueError):
+            continue
+        team_a = str(match.get("team_a", "")).strip()
+        team_b = str(match.get("team_b", "")).strip()
+        match_date = str(match.get("match_start_time", ""))[:10]
+        if not team_a or not team_b:
+            continue
+        title = f"{team_a} vs {team_b}"
+        label = f"{title} ({match_date})" if match_date else title
+        key = (
+            f"{match_date.replace('-', '_')}_{team_a.lower().replace(' ', '_')}_vs_{team_b.lower().replace(' ', '_')}"
+            if match_date
+            else title.lower().replace(" ", "_")
+        )
+        lookup[match_id] = {"match_title": title, "match_label": label, "match_key": key}
+    return lookup
 
 
 def repair_commentary_match_metadata(df: pd.DataFrame, past_matches_path: Path) -> pd.DataFrame:
@@ -1020,6 +1049,675 @@ def aggregate_bowling_leaders(df: pd.DataFrame) -> pd.DataFrame:
     return grouped.sort_values(["wickets", "economy", "runs_conceded"], ascending=[False, True, True]).head(5)
 
 
+def normalize_series(series: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce").fillna(0.0).astype(float)
+    if numeric.empty:
+        return numeric
+    minimum = float(numeric.min())
+    maximum = float(numeric.max())
+    if maximum == minimum:
+        return numeric.apply(lambda value: 1.0 if value > 0 else 0.0)
+    return (numeric - minimum) / (maximum - minimum)
+
+
+def inverse_normalize_series(series: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce").fillna(0.0).astype(float)
+    if numeric.empty:
+        return numeric
+    minimum = float(numeric.min())
+    maximum = float(numeric.max())
+    if maximum == minimum:
+        return numeric.apply(lambda value: 1.0 if value >= 0 else 0.0)
+    return 1.0 - ((numeric - minimum) / (maximum - minimum))
+
+
+def build_batting_innings_stats(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(
+            columns=[
+                "match_key",
+                "match_label",
+                "batting_team",
+                "batsman",
+                "runs",
+                "balls",
+                "boundary_runs",
+                "strike_rate",
+                "team_runs",
+                "team_balls",
+                "team_strike_rate",
+                "delta_strike_rate",
+                "boundary_share",
+            ]
+        )
+
+    batting_events = df[df["extra_type"] != "wide"].copy()
+    innings_df = (
+        batting_events.groupby(["match_key", "match_label", "batting_team", "batsman"], dropna=False)
+        .agg(
+            runs=("batsman_runs", "sum"),
+            balls=("batsman", "size"),
+            boundary_runs=("boundary_runs", "sum"),
+        )
+        .reset_index()
+    )
+    innings_df = innings_df[innings_df["batsman"].ne("")]
+    innings_df["strike_rate"] = innings_df.apply(
+        lambda row: row["runs"] / row["balls"] * 100.0 if row["balls"] > 0 else 0.0,
+        axis=1,
+    )
+
+    team_innings_df = (
+        batting_events.groupby(["match_key", "match_label", "batting_team"], dropna=False)
+        .agg(team_runs=("batsman_runs", "sum"), team_balls=("batsman", "size"))
+        .reset_index()
+    )
+    team_innings_df["team_strike_rate"] = team_innings_df.apply(
+        lambda row: row["team_runs"] / row["team_balls"] * 100.0 if row["team_balls"] > 0 else 0.0,
+        axis=1,
+    )
+    innings_df = innings_df.merge(
+        team_innings_df,
+        on=["match_key", "match_label", "batting_team"],
+        how="left",
+    )
+    innings_df["delta_strike_rate"] = (innings_df["strike_rate"] - innings_df["team_strike_rate"]).clip(lower=0.0)
+    innings_df["boundary_share"] = innings_df.apply(
+        lambda row: row["boundary_runs"] / row["runs"] if row["runs"] > 0 else 0.0,
+        axis=1,
+    )
+    return innings_df.sort_values(["match_label", "batting_team", "runs"], ascending=[True, True, False])
+
+
+def build_bowling_innings_stats(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(
+            columns=[
+                "match_key",
+                "match_label",
+                "bowling_team",
+                "bowler",
+                "wickets",
+                "legal_balls",
+                "runs_conceded",
+                "overs_bowled",
+                "economy",
+            ]
+        )
+
+    bowling_df = df.copy()
+    bowling_df["bowler_wicket"] = bowling_df.apply(
+        lambda row: 1
+        if row["is_wicket"] == 1 and row["dismissal_kind"] not in {"run_out", "retired_hurt"}
+        else 0,
+        axis=1,
+    )
+    bowling_df["runs_conceded"] = bowling_df.apply(
+        lambda row: row["batsman_runs"] + row["extras"]
+        if row["extra_type"] in {"none", "wide", "no_ball"}
+        else row["batsman_runs"],
+        axis=1,
+    )
+    innings_df = (
+        bowling_df.groupby(["match_key", "match_label", "bowling_team", "bowler"], dropna=False)
+        .agg(
+            wickets=("bowler_wicket", "sum"),
+            legal_balls=("is_legal_ball", "sum"),
+            runs_conceded=("runs_conceded", "sum"),
+        )
+        .reset_index()
+    )
+    innings_df = innings_df[innings_df["bowler"].ne("")]
+    innings_df["overs_bowled"] = innings_df["legal_balls"] / 6.0
+    innings_df["economy"] = innings_df.apply(
+        lambda row: row["runs_conceded"] / row["overs_bowled"] if row["overs_bowled"] > 0 else 0.0,
+        axis=1,
+    )
+    return innings_df.sort_values(["match_label", "bowling_team", "wickets"], ascending=[True, True, False])
+
+
+def build_scorecard_batting_innings_stats(scorecards_dir: Path) -> pd.DataFrame:
+    match_lookup = load_scorecard_match_lookup(scorecards_dir)
+    records: list[dict[str, object]] = []
+
+    for json_path in sorted(scorecards_dir.glob("*.json")):
+        if json_path.name in {"past_matches.json", "tournament_points_table.json"}:
+            continue
+        try:
+            raw_payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        scorecard_payload = load_scorecard_page_payload(scorecards_dir, json_path.stem)
+        if scorecard_payload is None:
+            continue
+
+        try:
+            match_id = int(raw_payload.get("match_id"))
+        except (TypeError, ValueError):
+            match_id = -1
+        match_meta = match_lookup.get(match_id, {})
+        match_title = str(match_meta.get("match_title") or raw_payload.get("match_title") or scorecard_payload.get("match_title", "")).strip()
+        match_label = str(match_meta.get("match_label") or match_title).strip()
+        match_key = str(match_meta.get("match_key") or json_path.stem).strip()
+
+        for innings_row in scorecard_payload.get("scorecard", []) or []:
+            batting_team = str(innings_row.get("teamName", "")).strip()
+            batting_rows = innings_row.get("batting", []) or []
+            if not batting_team or not batting_rows:
+                continue
+
+            team_batting_runs = 0
+            team_batting_balls = 0
+            cleaned_batters: list[dict[str, object]] = []
+            for batter in batting_rows:
+                batter_name = str(batter.get("name", "")).replace("  (wk)", "").replace("  (c)", "").strip()
+                if not batter_name:
+                    continue
+                runs = int(batter.get("runs", 0) or 0)
+                balls = int(batter.get("balls", 0) or 0)
+                fours = int(batter.get("4s", 0) or 0)
+                sixes = int(batter.get("6s", 0) or 0)
+                team_batting_runs += runs
+                team_batting_balls += balls
+                cleaned_batters.append(
+                    {
+                        "batsman": batter_name,
+                        "runs": runs,
+                        "balls": balls,
+                        "fours": fours,
+                        "sixes": sixes,
+                    }
+                )
+
+            for batter in cleaned_batters:
+                strike_rate = (int(batter["runs"]) / int(batter["balls"]) * 100.0) if int(batter["balls"]) > 0 else 0.0
+                records.append(
+                    {
+                        "match_key": match_key,
+                        "match_label": match_label,
+                        "match_title": match_title,
+                        "batting_team": batting_team,
+                        "batsman": batter["batsman"],
+                        "runs": batter["runs"],
+                        "balls": batter["balls"],
+                        "fours": batter["fours"],
+                        "sixes": batter["sixes"],
+                        "strike_rate": strike_rate,
+                        "team_batting_runs": team_batting_runs,
+                        "team_batting_balls": team_batting_balls,
+                    }
+                )
+    batting_df = pd.DataFrame(records)
+    if batting_df.empty:
+        return batting_df
+
+    team_tournament_df = (
+        batting_df.groupby("batting_team", dropna=False)
+        .agg(
+            team_tournament_runs=("runs", "sum"),
+            team_tournament_balls=("balls", "sum"),
+        )
+        .reset_index()
+    )
+    team_tournament_df["team_tournament_strike_rate"] = team_tournament_df.apply(
+        lambda row: row["team_tournament_runs"] / row["team_tournament_balls"] * 100.0
+        if row["team_tournament_balls"] > 0
+        else 0.0,
+        axis=1,
+    )
+    batting_df = batting_df.merge(team_tournament_df, on="batting_team", how="left")
+    batting_df["delta_strike_rate"] = (
+        batting_df["strike_rate"] - batting_df["team_tournament_strike_rate"]
+    ).clip(lower=0.0)
+    return batting_df
+
+
+def build_scorecard_bowling_innings_stats(scorecards_dir: Path) -> pd.DataFrame:
+    match_lookup = load_scorecard_match_lookup(scorecards_dir)
+    records: list[dict[str, object]] = []
+
+    for json_path in sorted(scorecards_dir.glob("*.json")):
+        if json_path.name in {"past_matches.json", "tournament_points_table.json"}:
+            continue
+        try:
+            raw_payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        scorecard_payload = load_scorecard_page_payload(scorecards_dir, json_path.stem)
+        if scorecard_payload is None:
+            continue
+
+        try:
+            match_id = int(raw_payload.get("match_id"))
+        except (TypeError, ValueError):
+            match_id = -1
+        match_meta = match_lookup.get(match_id, {})
+        match_title = str(match_meta.get("match_title") or raw_payload.get("match_title") or scorecard_payload.get("match_title", "")).strip()
+        match_label = str(match_meta.get("match_label") or match_title).strip()
+        match_key = str(match_meta.get("match_key") or json_path.stem).strip()
+
+        for innings_row in scorecard_payload.get("scorecard", []) or []:
+            batting_team = str(innings_row.get("teamName", "")).strip()
+            bowling_team = resolve_scorecard_bowling_team(batting_team, match_title)
+            for bowling_row in innings_row.get("bowling", []) or []:
+                bowler = str(bowling_row.get("name", "")).replace("  (wk)", "").replace("  (c)", "").strip()
+                if not bowler:
+                    continue
+                legal_balls = overs_value_to_balls(bowling_row.get("overs", 0), bowling_row.get("balls", 0))
+                overs_bowled = legal_balls / 6.0
+                runs_conceded = int(bowling_row.get("runs", 0) or 0)
+                records.append(
+                    {
+                        "match_key": match_key,
+                        "match_label": match_label,
+                        "match_title": match_title,
+                        "bowling_team": bowling_team,
+                        "bowler": bowler,
+                        "wickets": int(bowling_row.get("wickets", 0) or 0),
+                        "legal_balls": legal_balls,
+                        "overs_bowled": overs_bowled,
+                        "runs_conceded": runs_conceded,
+                        "economy": (runs_conceded / overs_bowled) if overs_bowled > 0 else 0.0,
+                    }
+                )
+
+    return pd.DataFrame(records)
+
+
+def summarize_player_scores(
+    innings_df: pd.DataFrame,
+    *,
+    team_column: str,
+    player_column: str,
+    score_column: str,
+    extra_aggregations: dict[str, tuple[str, str]],
+) -> pd.DataFrame:
+    if innings_df.empty:
+        return pd.DataFrame(columns=[team_column, player_column, "innings_count", "total_score", "average_score"])
+
+    summary_df = (
+        innings_df.groupby([team_column, player_column], dropna=False)
+        .agg(
+            innings_count=(score_column, "size"),
+            total_score=(score_column, "sum"),
+            average_score=(score_column, "mean"),
+            **extra_aggregations,
+        )
+        .reset_index()
+    )
+    return summary_df.sort_values(
+        ["average_score", "total_score", "innings_count", player_column],
+        ascending=[False, False, False, True],
+    ).head(5)
+
+
+def score_batting_option_3_innings(
+    innings_df: pd.DataFrame,
+    *,
+    runs_weight: float,
+    strike_rate_weight: float,
+) -> pd.DataFrame:
+    scored_df = innings_df.copy()
+    if "runs_norm" not in scored_df.columns:
+        scored_df["runs_norm"] = normalize_series(scored_df["runs"])
+    if "delta_strike_rate_norm" not in scored_df.columns:
+        scored_df["delta_strike_rate_norm"] = normalize_series(scored_df["delta_strike_rate"])
+    scored_df["batting_option_3_score"] = (
+        runs_weight * scored_df["runs_norm"]
+        + strike_rate_weight * scored_df["delta_strike_rate_norm"]
+    )
+    return scored_df
+
+
+def compute_batting_option_tables(
+    df: pd.DataFrame,
+    *,
+    runs_weight_option_2: float,
+    strike_rate_weight_option_2: float,
+    runs_weight_option_3: float,
+    strike_rate_weight_option_3: float,
+    boundary_weight_option_3: float,
+    minimum_balls_faced_option_3: int = 0,
+) -> dict[str, pd.DataFrame]:
+    innings_df = build_batting_innings_stats(df)
+    if innings_df.empty:
+        empty_df = pd.DataFrame(
+            columns=["batting_team", "batsman", "innings_count", "total_score", "average_score", "runs", "strike_rate"]
+        )
+        return {"option_1": empty_df, "option_2": empty_df, "option_3": empty_df}
+
+    innings_df = innings_df.copy()
+    innings_df["runs_norm"] = normalize_series(innings_df["runs"])
+    innings_df["delta_strike_rate_norm"] = normalize_series(innings_df["delta_strike_rate"])
+
+    innings_df["batting_option_1_score"] = innings_df["runs_norm"]
+    innings_df["batting_option_2_score"] = (
+        runs_weight_option_2 * innings_df["runs_norm"]
+        + strike_rate_weight_option_2 * innings_df["delta_strike_rate_norm"]
+    )
+    innings_df = score_batting_option_3_innings(
+        innings_df,
+        runs_weight=runs_weight_option_3,
+        strike_rate_weight=strike_rate_weight_option_3,
+    )
+
+    extra_aggs = {
+        "runs": ("runs", "mean"),
+        "strike_rate": ("strike_rate", "mean"),
+    }
+    return {
+        "option_1": summarize_player_scores(
+            innings_df,
+            team_column="batting_team",
+            player_column="batsman",
+            score_column="batting_option_1_score",
+            extra_aggregations=extra_aggs,
+        ),
+        "option_2": summarize_player_scores(
+            innings_df,
+            team_column="batting_team",
+            player_column="batsman",
+            score_column="batting_option_2_score",
+            extra_aggregations=extra_aggs,
+        ),
+        "option_3": summarize_player_scores(
+            innings_df,
+            team_column="batting_team",
+            player_column="batsman",
+            score_column="batting_option_3_score",
+            extra_aggregations=extra_aggs,
+        ),
+    }
+
+
+def compute_bowling_option_tables(
+    df: pd.DataFrame,
+    *,
+    wickets_weight_option_2: float,
+    economy_weight_option_2: float,
+) -> dict[str, pd.DataFrame]:
+    innings_df = build_bowling_innings_stats(df)
+    if innings_df.empty:
+        empty_df = pd.DataFrame(
+            columns=["bowling_team", "bowler", "innings_count", "total_score", "average_score", "wickets", "economy"]
+        )
+        return {"option_1": empty_df, "option_2": empty_df}
+
+    innings_df = innings_df.copy()
+    innings_df["wickets_norm"] = normalize_series(innings_df["wickets"])
+    innings_df["economy_inv_norm"] = inverse_normalize_series(innings_df["economy"])
+
+    innings_df["bowling_option_1_score"] = innings_df["wickets_norm"]
+    innings_df["bowling_option_2_score"] = (
+        wickets_weight_option_2 * innings_df["wickets_norm"]
+        + economy_weight_option_2 * innings_df["economy_inv_norm"]
+    )
+
+    extra_aggs = {
+        "wickets": ("wickets", "mean"),
+        "economy": ("economy", "mean"),
+    }
+    return {
+        "option_1": summarize_player_scores(
+            innings_df,
+            team_column="bowling_team",
+            player_column="bowler",
+            score_column="bowling_option_1_score",
+            extra_aggregations=extra_aggs,
+        ),
+        "option_2": summarize_player_scores(
+            innings_df,
+            team_column="bowling_team",
+            player_column="bowler",
+            score_column="bowling_option_2_score",
+            extra_aggregations=extra_aggs,
+        ),
+    }
+
+
+def compute_scorecard_all_rounder_score_table(
+    scorecards_dir: Path,
+    *,
+    match_key: str = "ALL",
+    batting_runs_weight: float,
+    batting_strike_rate_weight: float,
+    batting_minimum_balls_faced: int = 0,
+    bowling_wickets_weight: float,
+    bowling_economy_weight: float,
+    bowling_minimum_balls_bowled: int = 30,
+) -> pd.DataFrame:
+    batting_df_all = build_scorecard_batting_innings_stats(scorecards_dir)
+    bowling_df = build_scorecard_bowling_innings_stats(scorecards_dir)
+    batting_df = batting_df_all.copy()
+
+    if match_key != "ALL":
+        batting_df = batting_df[batting_df["match_key"] == match_key]
+        bowling_df = bowling_df[bowling_df["match_key"] == match_key]
+
+    batting_summary = pd.DataFrame(
+        columns=[
+            "team",
+            "player",
+            "batting_runs_component",
+            "batting_delta_sr_component",
+            "batting_total_balls_gate",
+            "batting_option_2",
+        ]
+    )
+    bowling_summary = pd.DataFrame(
+        columns=[
+            "team",
+            "player",
+            "bowling_wickets_component",
+            "bowling_total_balls_gate",
+            "bowling_economy_component",
+            "bowling_option_2",
+        ]
+    )
+
+    if not batting_df.empty:
+        batting_df = batting_df.copy()
+        tournament_scope_runs = pd.to_numeric(batting_df["runs"], errors="coerce").fillna(0).sum()
+        tournament_scope_balls = pd.to_numeric(batting_df["balls"], errors="coerce").fillna(0).sum()
+        tournament_scope_strike_rate = (
+            tournament_scope_runs / tournament_scope_balls * 100.0
+            if tournament_scope_balls > 0
+            else 0.0
+        )
+        batting_summary = (
+            batting_df.groupby(["batting_team", "batsman"], dropna=False)
+            .agg(
+                total_runs=("runs", "sum"),
+                total_balls=("balls", "sum"),
+            )
+            .reset_index()
+        )
+        batting_summary["player_strike_rate"] = batting_summary.apply(
+            lambda row: row["total_runs"] / row["total_balls"] * 100.0
+            if row["total_balls"] > 0
+            else 0.0,
+            axis=1,
+        )
+        batting_summary["total_delta_strike_rate"] = (
+            batting_summary["player_strike_rate"] - tournament_scope_strike_rate
+        ).clip(lower=0.0)
+        batting_summary["runs_norm"] = normalize_series(batting_summary["total_runs"])
+        batting_summary["delta_strike_rate_norm"] = normalize_series(
+            batting_summary["total_delta_strike_rate"]
+        )
+        batting_summary["batting_runs_component"] = batting_runs_weight * batting_summary["runs_norm"]
+        batting_summary["batting_delta_sr_component_raw"] = (
+            batting_strike_rate_weight * batting_summary["delta_strike_rate_norm"]
+        )
+        batting_summary["batting_total_balls_gate"] = (
+            pd.to_numeric(batting_summary["total_balls"], errors="coerce").fillna(0).astype(int)
+            >= int(batting_minimum_balls_faced)
+        ).astype(float)
+        batting_summary["batting_delta_sr_component"] = (
+            batting_summary["batting_total_balls_gate"] * batting_summary["batting_delta_sr_component_raw"]
+        )
+        batting_summary["batting_option_2"] = (
+            batting_summary["batting_runs_component"]
+            + batting_summary["batting_delta_sr_component"]
+        )
+        batting_summary = batting_summary.rename(columns={"batting_team": "team", "batsman": "player"})
+        batting_summary = batting_summary.drop(
+            columns=[
+                "total_runs",
+                "total_balls",
+                "player_strike_rate",
+                "total_delta_strike_rate",
+                "runs_norm",
+                "delta_strike_rate_norm",
+                "batting_delta_sr_component_raw",
+            ]
+        )
+
+    if not bowling_df.empty:
+        bowling_df = bowling_df.copy()
+        bowling_summary = (
+            bowling_df.groupby(["bowling_team", "bowler"], dropna=False)
+            .agg(
+                total_wickets=("wickets", "sum"),
+                total_legal_balls=("legal_balls", "sum"),
+                total_runs_conceded=("runs_conceded", "sum"),
+            )
+            .reset_index()
+        )
+        bowling_summary["total_overs_bowled"] = bowling_summary["total_legal_balls"] / 6.0
+        bowling_summary["total_economy"] = bowling_summary.apply(
+            lambda row: row["total_runs_conceded"] / row["total_overs_bowled"]
+            if row["total_overs_bowled"] > 0
+            else 0.0,
+            axis=1,
+        )
+        bowling_summary["wickets_norm"] = normalize_series(bowling_summary["total_wickets"])
+        bowling_summary["economy_inv_norm"] = inverse_normalize_series(
+            bowling_summary["total_economy"]
+        )
+        bowling_summary["bowling_wickets_component"] = (
+            bowling_wickets_weight * bowling_summary["wickets_norm"]
+        )
+        bowling_summary["bowling_total_balls_gate"] = (
+            pd.to_numeric(bowling_summary["total_legal_balls"], errors="coerce").fillna(0).astype(int)
+            >= int(bowling_minimum_balls_bowled)
+        ).astype(float)
+        bowling_summary["bowling_economy_component"] = (
+            bowling_summary["bowling_total_balls_gate"]
+            * bowling_economy_weight
+            * bowling_summary["economy_inv_norm"]
+        )
+        bowling_summary["bowling_option_2"] = (
+            bowling_summary["bowling_wickets_component"] + bowling_summary["bowling_economy_component"]
+        )
+        bowling_summary = bowling_summary.rename(columns={"bowling_team": "team", "bowler": "player"})
+        bowling_summary = bowling_summary.drop(
+            columns=[
+                "total_wickets",
+                "total_legal_balls",
+                "total_runs_conceded",
+                "total_overs_bowled",
+                "total_economy",
+                "wickets_norm",
+                "economy_inv_norm",
+            ]
+        )
+
+    merged_df = batting_summary.merge(bowling_summary, on=["team", "player"], how="outer")
+    if merged_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "team",
+                "player",
+                "batting_runs_component",
+                "batting_delta_sr_component",
+                "batting_total_balls_gate",
+                "batting_option_2",
+                "bowling_wickets_component",
+                "bowling_total_balls_gate",
+                "bowling_economy_component",
+                "bowling_option_2",
+                "average_score",
+            ]
+        )
+
+    for column in [
+        "batting_runs_component",
+        "batting_delta_sr_component",
+        "batting_total_balls_gate",
+        "batting_option_2",
+        "bowling_wickets_component",
+        "bowling_total_balls_gate",
+        "bowling_economy_component",
+        "bowling_option_2",
+    ]:
+        merged_df[column] = pd.to_numeric(merged_df[column], errors="coerce").fillna(0.0)
+    merged_df["average_score"] = (merged_df["batting_option_2"] + merged_df["bowling_option_2"]) / 2.0
+    ordered_columns = [
+        "team",
+        "player",
+        "batting_runs_component",
+        "batting_delta_sr_component",
+        "batting_total_balls_gate",
+        "batting_option_2",
+        "bowling_wickets_component",
+        "bowling_total_balls_gate",
+        "bowling_economy_component",
+        "bowling_option_2",
+        "average_score",
+    ]
+    return (
+        merged_df[ordered_columns]
+        .sort_values(["average_score", "batting_option_2", "bowling_option_2", "player"], ascending=[False, False, False, True])
+        .head(5)
+    )
+
+
+def build_option_score_table(
+    score_df: pd.DataFrame,
+    *,
+    table_id: str,
+    team_label: str,
+    player_label: str,
+    player_column: str,
+    team_column: str,
+    metric_label: str,
+    metric_column: str,
+) -> dash_table.DataTable:
+    display_df = pd.DataFrame(
+        {
+            team_column: score_df.get(team_column, pd.Series(dtype=str)),
+            player_column: score_df.get(player_column, pd.Series(dtype=str)),
+            "innings_count": score_df.get("innings_count", pd.Series(dtype=int)),
+            "total_score": pd.to_numeric(
+                score_df.get("total_score", pd.Series(dtype=float)), errors="coerce"
+            ).round(3),
+            "average_score": pd.to_numeric(
+                score_df.get("average_score", pd.Series(dtype=float)), errors="coerce"
+            ).round(3),
+            metric_column: pd.to_numeric(
+                score_df.get(metric_column, pd.Series(dtype=float)), errors="coerce"
+            ).round(2),
+        }
+    )
+    return dash_table.DataTable(
+        id=table_id,
+        columns=[
+            {"name": team_label, "id": team_column},
+            {"name": player_label, "id": player_column},
+            {"name": "Innings", "id": "innings_count"},
+            {"name": "Total Score", "id": "total_score"},
+            {"name": "Average Score", "id": "average_score"},
+            {"name": metric_label, "id": metric_column},
+        ],
+        data=display_df.to_dict("records"),
+        style_table={"overflowX": "auto"},
+        style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
+        style_header={"fontWeight": "bold", "textAlign": "center"},
+        style_data={"whiteSpace": "normal", "height": "auto"},
+    )
+
+
 def build_top_bowler_wicket_types_figure(top_bowling_df: pd.DataFrame) -> go.Figure:
     wicket_type_columns = ["caught", "bowled", "stumped", "hit_wicket"]
     label_map = {
@@ -1077,7 +1775,7 @@ def build_top_batting_table_component(top_batting_df: pd.DataFrame) -> dash_tabl
     display_df = pd.DataFrame(
         {
             "batting_team": top_batting_df.get("batting_team", pd.Series(dtype=str)),
-            "batsman": top_batting_df.get("batsman", pd.Series(dtype=str)),
+            "batter": top_batting_df.get("batsman", pd.Series(dtype=str)),
             "runs": top_batting_df.get("runs", pd.Series(dtype=int)),
             "balls": top_batting_df.get("balls", pd.Series(dtype=int)),
             "ones": top_batting_df.get("ones", pd.Series(dtype=int)),
@@ -1092,7 +1790,7 @@ def build_top_batting_table_component(top_batting_df: pd.DataFrame) -> dash_tabl
         id="top-batting-table",
         columns=[
             {"name": ["Identity", "Team"], "id": "batting_team"},
-            {"name": ["Identity", "Batter"], "id": "batsman"},
+            {"name": ["Identity", "Batter"], "id": "batter"},
             {"name": ["Output", "Runs*" if "runs" in derived_columns else "Runs"], "id": "runs"},
             {"name": ["Output", "Balls*" if "balls" in derived_columns else "Balls"], "id": "balls"},
             {"name": ["Scoring Shots", "1s"], "id": "ones"},
@@ -1115,7 +1813,7 @@ def build_top_batting_footnote(top_batting_df: pd.DataFrame) -> html.P:
     if not derived_columns:
         return html.P("")
     return html.P(
-        "Accurate - Derived from scorecards. without * are very close but need not be exact",
+        "* Accurate - Derived from scorecards. Metrics without * are very close to reference but need not be exact",
         style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 
@@ -1157,7 +1855,7 @@ def build_points_table_footnote(points_df: pd.DataFrame) -> html.P:
     if not derived_columns:
         return html.P("")
     return html.P(
-        "Accurate - Derived from scorecards. without * are very close but need not be exact",
+        "* Accurate - Derived from scorecards. Metrics without * are very close to reference but need not be exact",
         style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 
@@ -1301,7 +1999,7 @@ def build_top_bowling_footnote(top_bowling_df: pd.DataFrame) -> html.P:
     if not derived_columns:
         return html.P("")
     return html.P(
-        "Accurate - Derived from scorecards. without * are very close but need not be exact",
+        "* Accurate - Derived from scorecards. Metrics without * are very close to reference but need not be exact",
         style={"fontSize": "12px", "marginTop": "8px", "color": "#555"},
     )
 
@@ -1436,6 +2134,10 @@ def build_app(
     df: pd.DataFrame, points_df: pd.DataFrame, figure_config: dict[str, bool], scorecards_dir: Path | None = None
 ) -> dash.Dash:
     app = dash.Dash(__name__)
+    default_batting_option_2 = {"runs": 0.75, "delta_sr": 0.25}
+    default_bowling_option_2 = {"wickets": 0.7, "economy": 0.3}
+    default_batting_option_2_minimum_balls = 20
+    default_bowling_option_2_minimum_balls = 30
     match_options = [{"label": "All matches", "value": "ALL"}]
     if not df.empty:
         match_options.extend(
@@ -1452,7 +2154,34 @@ def build_app(
     points_table_component, points_table_footnote, top_batting_table, top_batting_footnote, top_bowling_table, top_bowling_footnote, top_batter_scoring_types_fig, top_bowler_wicket_types_fig = (
         build_points_table_components(points_df, df, scorecards_dir)
     )
-
+    all_rounder_scores = (
+        compute_scorecard_all_rounder_score_table(
+            scorecards_dir,
+            match_key="ALL",
+            batting_runs_weight=default_batting_option_2["runs"],
+            batting_strike_rate_weight=default_batting_option_2["delta_sr"],
+            batting_minimum_balls_faced=default_batting_option_2_minimum_balls,
+            bowling_wickets_weight=default_bowling_option_2["wickets"],
+            bowling_economy_weight=default_bowling_option_2["economy"],
+            bowling_minimum_balls_bowled=default_bowling_option_2_minimum_balls,
+        )
+        if scorecards_dir is not None
+        else pd.DataFrame(
+            columns=[
+                "team",
+                "player",
+                "batting_runs_component",
+                "batting_delta_sr_component",
+                "batting_total_balls_gate",
+                "batting_option_2",
+                "bowling_wickets_component",
+                "bowling_total_balls_gate",
+                "bowling_economy_component",
+                "bowling_option_2",
+                "average_score",
+            ]
+        )
+    )
     app.layout = html.Div(
         [
             html.H1("Ball-by-Ball Analytics Dashboard"),
@@ -1491,9 +2220,11 @@ def build_app(
                 style={"maxWidth": "480px", "marginBottom": "16px"},
             ),
             dcc.Tabs(
-                [
+                value="mvp-tab",
+                children=[
                     dcc.Tab(
-                        label="Discipline & Boundary",
+                        value="discipline-tab",
+                        label="Extras & Fielding Discipline",
                         children=[
                             html.Div(
                                 [
@@ -1557,7 +2288,8 @@ def build_app(
                         ],
                     ),
                     dcc.Tab(
-                        label="Points Table",
+                        value="standings-tab",
+                        label="Standings & Leaders",
                         children=[
                             html.Div(
                                 [
@@ -1596,6 +2328,130 @@ def build_app(
                                     id="top-bowler-wicket-types-chart",
                                 ),
                                 style=component_style(figure_config["top_bowler_wicket_types_chart"]),
+                            ),
+                        ],
+                    ),
+                    dcc.Tab(
+                        value="mvp-tab",
+                        label="Most Valued Player",
+                        children=[
+                            html.Div(
+                                [
+                                    html.H2("Equations for value(computed for whole tournament)"),
+                                    html.P(
+                                        "Viewer-adjustable coefficients update the value terms and rankings below.",
+                                        style={"marginTop": "0"},
+                                    ),
+                                    dcc.Markdown(
+                                        (
+                                            "$$\\operatorname{norm}(x; x_{\\min}, x_{\\max}) = \\frac{x - x_{\\min}}{x_{\\max} - x_{\\min}}$$\n\n"
+                                            "Batting value:\n"
+                                            "$$V_{bat} = w_r R^* + \\mathbf{1}[B_{tot} \\ge B_{\\min}] w_{sr} \\Delta SR^*$$\n\n"
+                                            "$$R^* = \\operatorname{norm}(R_{tot}; R_{tot,\\min}, R_{tot,\\max})$$\n\n"
+                                            "$$\\Delta SR^* = \\operatorname{norm}(\\max(0, SR_{tot} - TourSR); \\Delta SR_{\\min}, \\Delta SR_{\\max})$$\n\n"
+                                            "Bowling value:\n"
+                                            "$$V_{bowl} = w_w W^* + \\mathbf{1}[LB_{tot} \\ge LB_{\\min}] w_e ECO^*_{inv}$$\n\n"
+                                            "$$W^* = \\operatorname{norm}(W_{tot}; W_{tot,\\min}, W_{tot,\\max})$$\n\n"
+                                            "$$ECO^*_{inv} = 1 - \\operatorname{norm}(ECO_{tot}; ECO_{tot,\\min}, ECO_{tot,\\max})$$\n\n"
+                                            "Here $$TourSR$$ is the tournament-wide strike rate, $$LB$$ means legal balls, "
+                                            "and all totals are computed over the whole tournament."
+                                        ),
+                                        mathjax=True,
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Div(
+                                                [
+                                                    html.H3("Batting Value Weights"),
+                                                    html.Label("Runs weight"),
+                                                    dcc.Input(
+                                                        id="batting-option-3-runs-weight",
+                                                        type="number",
+                                                        value=default_batting_option_2["runs"],
+                                                        step=0.05,
+                                                    ),
+                                                    html.Label("Delta SR weight"),
+                                                    dcc.Input(
+                                                        id="batting-option-3-delta-sr-weight",
+                                                        type="number",
+                                                        value=default_batting_option_2["delta_sr"],
+                                                        step=0.05,
+                                                    ),
+                                                    html.Label("Total minimum balls faced"),
+                                                    dcc.Input(
+                                                        id="batting-option-3-minimum-balls",
+                                                        type="number",
+                                                        value=default_batting_option_2_minimum_balls,
+                                                        step=1,
+                                                        min=0,
+                                                    ),
+                                                ],
+                                                style={"display": "grid", "gap": "8px", "minWidth": "220px"},
+                                            ),
+                                            html.Div(
+                                                [
+                                                    html.H3("Bowling Value Weights"),
+                                                    html.Label("Wickets weight"),
+                                                    dcc.Input(
+                                                        id="bowling-option-2-wickets-weight",
+                                                        type="number",
+                                                        value=default_bowling_option_2["wickets"],
+                                                        step=0.05,
+                                                    ),
+                                                    html.Label("Economy weight"),
+                                                    dcc.Input(
+                                                        id="bowling-option-2-economy-weight",
+                                                        type="number",
+                                                        value=default_bowling_option_2["economy"],
+                                                        step=0.05,
+                                                    ),
+                                                    html.Label("Total minimum balls bowled"),
+                                                    dcc.Input(
+                                                        id="bowling-option-2-minimum-balls",
+                                                        type="number",
+                                                        value=default_bowling_option_2_minimum_balls,
+                                                        step=1,
+                                                        min=0,
+                                                    ),
+                                                ],
+                                                style={"display": "grid", "gap": "8px", "minWidth": "220px"},
+                                            ),
+                                        ],
+                                        style={
+                                            "display": "flex",
+                                            "flexWrap": "wrap",
+                                            "gap": "24px",
+                                            "marginBottom": "16px",
+                                        },
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.H3("Top 5 Combined MVP Values"),
+                                            dash_table.DataTable(
+                                                id="scorecard-all-rounder-table",
+                                                columns=[
+                                                    {"name": "Team", "id": "team"},
+                                                    {"name": "Player", "id": "player"},
+                                                    {"name": "w_r R*", "id": "batting_runs_component"},
+                                                    {"name": "w_sr ΔSR*", "id": "batting_delta_sr_component"},
+                                                    {"name": "1[B_tot≥B_min]", "id": "batting_total_balls_gate"},
+                                                    {"name": "V_bat", "id": "batting_option_2"},
+                                                    {"name": "w_w W*", "id": "bowling_wickets_component"},
+                                                    {"name": "1[LB_tot≥LB_min]", "id": "bowling_total_balls_gate"},
+                                                    {"name": "w_e ECO*_inv", "id": "bowling_economy_component"},
+                                                    {"name": "V_bowl", "id": "bowling_option_2"},
+                                                    {"name": "V", "id": "average_score"},
+                                                ],
+                                                data=all_rounder_scores.round(3).to_dict("records"),
+                                                style_table={"overflowX": "auto"},
+                                                style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
+                                                style_header={"fontWeight": "bold", "textAlign": "center"},
+                                                style_data={"whiteSpace": "normal", "height": "auto"},
+                                            ),
+                                        ],
+                                        id="scorecard-all-rounder-table-container",
+                                    ),
+                                ]
                             ),
                         ],
                     ),
@@ -1881,6 +2737,78 @@ def build_app(
             boundary_table_fig,
             dropped_table_fig,
         )
+
+    @app.callback(
+        Output("scorecard-all-rounder-table-container", "children"),
+        Input("match-filter", "value"),
+        Input("batting-option-3-runs-weight", "value"),
+        Input("batting-option-3-delta-sr-weight", "value"),
+        Input("batting-option-3-minimum-balls", "value"),
+        Input("bowling-option-2-wickets-weight", "value"),
+        Input("bowling-option-2-economy-weight", "value"),
+        Input("bowling-option-2-minimum-balls", "value"),
+    )
+    def update_option_score_table(
+        match_value: str,
+        batting_option_3_runs_weight: float | None,
+        batting_option_3_delta_sr_weight: float | None,
+        batting_option_3_minimum_balls: float | None,
+        bowling_option_2_wickets_weight: float | None,
+        bowling_option_2_economy_weight: float | None,
+        bowling_option_2_minimum_balls: float | None,
+    ) -> list[html.Component]:
+        score_table_df = (
+            compute_scorecard_all_rounder_score_table(
+                scorecards_dir,
+                match_key=match_value,
+                batting_runs_weight=float(batting_option_3_runs_weight or 0.0),
+                batting_strike_rate_weight=float(batting_option_3_delta_sr_weight or 0.0),
+                batting_minimum_balls_faced=max(0, int(batting_option_3_minimum_balls or 0)),
+                bowling_wickets_weight=float(bowling_option_2_wickets_weight or 0.0),
+                bowling_economy_weight=float(bowling_option_2_economy_weight or 0.0),
+                bowling_minimum_balls_bowled=max(0, int(bowling_option_2_minimum_balls or 0)),
+            )
+            if scorecards_dir is not None
+            else pd.DataFrame(
+                columns=[
+                    "team",
+                    "player",
+                    "batting_runs_component",
+                    "batting_delta_sr_component",
+                    "batting_total_balls_gate",
+                    "batting_option_2",
+                    "bowling_wickets_component",
+                    "bowling_total_balls_gate",
+                    "bowling_economy_component",
+                    "bowling_option_2",
+                    "average_score",
+                ]
+            )
+        )
+        return [
+            html.H3("Top 5 Combined MVP Values"),
+            dash_table.DataTable(
+                id="scorecard-all-rounder-table",
+                columns=[
+                    {"name": "Team", "id": "team"},
+                    {"name": "Player", "id": "player"},
+                    {"name": "w_r R*", "id": "batting_runs_component"},
+                    {"name": "w_sr ΔSR*", "id": "batting_delta_sr_component"},
+                    {"name": "1[B_tot≥B_min]", "id": "batting_total_balls_gate"},
+                    {"name": "V_bat", "id": "batting_option_2"},
+                    {"name": "w_w W*", "id": "bowling_wickets_component"},
+                    {"name": "1[LB_tot≥LB_min]", "id": "bowling_total_balls_gate"},
+                    {"name": "w_e ECO*_inv", "id": "bowling_economy_component"},
+                    {"name": "V_bowl", "id": "bowling_option_2"},
+                    {"name": "V", "id": "average_score"},
+                ],
+                data=score_table_df.round(3).to_dict("records"),
+                style_table={"overflowX": "auto"},
+                style_cell={"padding": "8px", "textAlign": "center", "minWidth": "84px"},
+                style_header={"fontWeight": "bold", "textAlign": "center"},
+                style_data={"whiteSpace": "normal", "height": "auto"},
+            ),
+        ]
 
     return app
 

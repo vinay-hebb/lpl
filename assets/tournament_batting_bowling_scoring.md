@@ -34,11 +34,13 @@ Symbols used below:
 - $\operatorname{norm}(x; x_{\min}, x_{\max})$: min-max normalization that maps $x$ into $[0, 1]$
 - $x_{\min}, x_{\max}$: lower and upper normalization bounds for a generic quantity $x$
 - $w_k$: non-negative weight for component $k$, with all weights summing to $1$
-- $R^*, W^*, B^*, C^*, BOWLED^*, LBW^*, ST^*, HW^*, O^*$: normalized versions of runs, wickets, boundary contribution, caught wickets, bowled wickets, lbw wickets, stumped wickets, hit-wicket dismissals, and overs/workload respectively
+- $R^*, W^*, C^*, BOWLED^*, LBW^*, ST^*, HW^*, O^*$: normalized versions of runs, wickets, caught wickets, bowled wickets, lbw wickets, stumped wickets, hit-wicket dismissals, and overs/workload respectively
 - $\text{SR}$: batter strike rate
-- $\text{TeamSR}$: team strike rate for the same innings
-- $\Delta \text{SR}$: strike-rate advantage over the team rate, defined as $\max(0, \text{SR} - \text{TeamSR})$
+- $\text{TourSR}_{scope}$: tournament-wide strike rate across the currently selected scope
+- $\Delta \text{SR}$: strike-rate advantage over the tournament strike rate, defined as $\max(0, \text{SR} - \text{TourSR}_{scope})$
 - $\Delta \text{SR}_{\max}$: upper bound used to normalize $\Delta \text{SR}$
+- $B_{tot}$: total balls faced by the batter across the selected scope
+- $B_{\min}$: minimum total balls-faced threshold for batting option 2 eligibility
 - $\text{ParAdjustment}$: adjustment based on how the innings compares with par conditions
 - $PAR_{\min}, PAR_{\max}$: normalization bounds for par adjustment
 - $\text{ContextAdjustment}$: adjustment for match situation, pressure, or batting context
@@ -56,9 +58,23 @@ Symbols used below:
 - Superscript $^*$: normalized/scaled form of a metric
 - Subscript $_{inv}$: inverse-normalized form, where lower raw values produce higher scores
 
-$$
-\Delta \text{SR}^* = \operatorname{norm}(\max(0, \text{SR} - \text{TeamSR}); 0, \Delta \text{SR}_{\max})
-$$
+$$\Delta \text{SR}^* = \operatorname{norm}(\max(0, \text{SR} - \text{TourSR}_{scope}); 0, \Delta \text{SR}_{\max})$$
+
+$$R^* = \operatorname{norm}(R_{tot}; R_{tot,\min}, R_{tot,\max})$$
+
+$$W^* = \operatorname{norm}(W_{tot}; W_{tot,\min}, W_{tot,\max})$$
+
+For player-level summaries, the dashboard uses totals within the selected scope:
+
+$$R_{tot,p} = \sum_{i=1}^{I_p} R_{p,i}$$
+
+$$SR_{tot,p} = \frac{100 \sum_{i=1}^{I_p} R_{p,i}}{\sum_{i=1}^{I_p} B_{p,i}}$$
+
+$$\Delta \text{SR}_p = \max(0, SR_{tot,p} - TourSR_{scope})$$
+
+$$\Delta \text{SR}^*_p = \operatorname{norm}(\Delta \text{SR}_p; \Delta \text{SR}_{\min}, \Delta \text{SR}_{\max})$$
+
+$$W_{tot,p} = \sum_{i=1}^{I_p} W_{p,i}$$
 
 $$
 PAR^* = \operatorname{norm}(\text{ParAdjustment}; PAR_{\min}, PAR_{\max})
@@ -93,9 +109,9 @@ $$
 | Option | Description |
 | --- | --- |
 | 1. Simple runs-only | $S = \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right)$. Easiest to explain, but ignores tempo and innings context. |
-| 2. Runs plus strike rate gate | $S = w_r \operatorname{norm}\left(\sum_i R_i; 0, R_{\max}\right) + w_{sr}\operatorname{norm}\left(\sum_i \max(0, \text{SR}_i - \text{TeamSR}_i); 0, \Delta \text{SR}_{\max}\right)$ with $w_r + w_{sr} = 1$. Good low-complexity option and close to the current baseline. |
-| 3. Weighted batting impact | $S = w_r R^* + w_{sr}\Delta \text{SR}^* + w_b B^*$ with $w_r + w_{sr} + w_b = 1$, where each starred term is separately normalized to $[0,1]$. Lets you reward volume and tempo separately. |
-| 4. Full MVP-style batting | $S = w_r R^* + w_{sr} SR^* + w_{par} PAR^* + w_{ctx} CONTEXT^*$ with $w_r + w_{sr} + w_{par} + w_{ctx} = 1$. Strongest model, but it needs richer batting-order and situation data.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
+| 2. Runs plus strike rate gate | $S = w_r R^* + \mathbf{1}[B_{tot} \ge B_{\min}] w_{sr}\Delta \text{SR}^*$ with $w_r + w_{sr} = 1$. Here $R^*$ is normalized using tournament-wide batting innings, and $\Delta \text{SR}$ is measured against the batting team's tournament strike rate. |
+| 3. Weighted batting impact with strike-rate gate | Same as option 2 in the current implementation. Keep this slot reserved only if another batting term is reintroduced later. |
+| 4. Full MVP-style batting | Strongest model, but it needs ball-by-ball or equivalent phase-aware match-state data to estimate par and context terms reliably.<sup>[1](https://blog.cricheroes.com/most-valuable-player-mvp-by-cricheroes/)</sup> |
 
 ## Bowling score options
 
@@ -224,6 +240,10 @@ Where:
 
 ## Notes
 
+- The configurable batting option 2 now enforces a total balls-faced gate via $$\mathbf{1}[B_{tot} \ge B_{\min}]$$ on the strike-rate term only.
+- The current MVP-style batting view uses player totals inside the selected scope for $$R^*$$ and $$\Delta \text{SR}^*$$, rather than averaging innings-level normalized values.
+- The current MVP-style bowling view uses player totals inside the selected scope for $$W^*$$ and $$ECO^*_{inv}$$, rather than averaging innings-level normalized values.
+- Batting option 4 needs ball-by-ball or equivalent match-state data, because scorecard-only aggregates do not expose enough information to model $$PAR^*$$ and $$CONTEXT^*$$.
 - The current batting baseline is intentionally simpler than the full CricHeroes batting MVP logic because the local commentary dataset does not reliably preserve explicit batting-order semantics.
 - The current bowling baseline is stronger because wicket mode, spell size, and runs conceded are recoverable from scorecards and commentary together.
 - If richer scorecard fields are preserved consistently, the full MVP-style batting and bowling options become more realistic to implement.
