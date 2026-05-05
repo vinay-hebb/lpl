@@ -1,5 +1,13 @@
 # Version Log
 
+## 0.5.0 - 2026-05-05
+
+- Added the most recent match data and commentary.
+- Fixed workbook rank formulas and MVP value aggregation.
+- Renamed dashboard batting labels to "Batter" and standardized scorecard-derived footnotes.
+- Added workbook generator, tournament equations, and expanded notation docs.
+- Added generated scoring workbook to `.gitignore`.
+
 ## 0.4.0 - 2026-04-28
 
 - Switched the batting and bowling leaderboards to scorecard-first derivation where local scorecards are sufficient, while keeping commentary-only fields such as batting 1s and 2s.
