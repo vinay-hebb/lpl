@@ -2337,92 +2337,99 @@ def build_app(
                         children=[
                             html.Div(
                                 [
-                                    html.H2("Equations for value(computed for whole tournament)"),
-                                    html.P(
-                                        "Viewer-adjustable coefficients update the value terms and rankings below.",
-                                        style={"marginTop": "0"},
-                                    ),
+                                    html.H2("Equations for value (computed for whole tournament)"),
                                     dcc.Markdown(
-                                        (
-                                            "$$\\operatorname{norm}(x; x_{\\min}, x_{\\max}) = \\frac{x - x_{\\min}}{x_{\\max} - x_{\\min}}$$\n\n"
-                                            "Batting value:\n"
-                                            "$$V_{bat} = w_r R^* + \\mathbf{1}[B_{tot} \\ge B_{\\min}] w_{sr} \\Delta SR^*$$\n\n"
-                                            "$$R^* = \\operatorname{norm}(R_{tot}; R_{tot,\\min}, R_{tot,\\max})$$\n\n"
-                                            "$$\\Delta SR^* = \\operatorname{norm}(\\max(0, SR_{tot} - TourSR); \\Delta SR_{\\min}, \\Delta SR_{\\max})$$\n\n"
-                                            "Bowling value:\n"
-                                            "$$V_{bowl} = w_w W^* + \\mathbf{1}[LB_{tot} \\ge LB_{\\min}] w_e ECO^*_{inv}$$\n\n"
-                                            "$$W^* = \\operatorname{norm}(W_{tot}; W_{tot,\\min}, W_{tot,\\max})$$\n\n"
-                                            "$$ECO^*_{inv} = 1 - \\operatorname{norm}(ECO_{tot}; ECO_{tot,\\min}, ECO_{tot,\\max})$$\n\n"
-                                            "Here $$TourSR$$ is the tournament-wide strike rate, $$LB$$ means legal balls, "
-                                            "and all totals are computed over the whole tournament."
-                                        ),
+                                        "$$\\operatorname{norm}(x; x_{\\min}, x_{\\max}) = \\frac{x - x_{\\min}}{x_{\\max} - x_{\\min}}$$",
                                         mathjax=True,
                                     ),
                                     html.Div(
                                         [
-                                            html.Div(
-                                                [
-                                                    html.H3("Batting Value Weights"),
-                                                    html.Label("Runs weight"),
-                                                    dcc.Input(
-                                                        id="batting-option-3-runs-weight",
-                                                        type="number",
-                                                        value=default_batting_option_2["runs"],
-                                                        step=0.05,
-                                                    ),
-                                                    html.Label("Delta SR weight"),
-                                                    dcc.Input(
-                                                        id="batting-option-3-delta-sr-weight",
-                                                        type="number",
-                                                        value=default_batting_option_2["delta_sr"],
-                                                        step=0.05,
-                                                    ),
-                                                    html.Label("Total minimum balls faced"),
-                                                    dcc.Input(
-                                                        id="batting-option-3-minimum-balls",
-                                                        type="number",
-                                                        value=default_batting_option_2_minimum_balls,
-                                                        step=1,
-                                                        min=0,
-                                                    ),
-                                                ],
-                                                style={"display": "grid", "gap": "8px", "minWidth": "220px"},
+                                            dcc.Markdown("$V_{bat}=$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Input(
+                                                id="batting-option-3-runs-weight",
+                                                type="number",
+                                                value=default_batting_option_2["runs"],
+                                                step=0.05,
+                                                debounce=True,
+                                                style={"width": "70px"},
                                             ),
-                                            html.Div(
-                                                [
-                                                    html.H3("Bowling Value Weights"),
-                                                    html.Label("Wickets weight"),
-                                                    dcc.Input(
-                                                        id="bowling-option-2-wickets-weight",
-                                                        type="number",
-                                                        value=default_bowling_option_2["wickets"],
-                                                        step=0.05,
-                                                    ),
-                                                    html.Label("Economy weight"),
-                                                    dcc.Input(
-                                                        id="bowling-option-2-economy-weight",
-                                                        type="number",
-                                                        value=default_bowling_option_2["economy"],
-                                                        step=0.05,
-                                                    ),
-                                                    html.Label("Total minimum balls bowled"),
-                                                    dcc.Input(
-                                                        id="bowling-option-2-minimum-balls",
-                                                        type="number",
-                                                        value=default_bowling_option_2_minimum_balls,
-                                                        step=1,
-                                                        min=0,
-                                                    ),
-                                                ],
-                                                style={"display": "grid", "gap": "8px", "minWidth": "220px"},
+                                            dcc.Markdown("$R^* + \\mathbf{1}[B_{tot} \\ge$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Input(
+                                                id="batting-option-3-minimum-balls",
+                                                type="number",
+                                                value=default_batting_option_2_minimum_balls,
+                                                step=1,
+                                                min=0,
+                                                debounce=True,
+                                                style={"width": "60px"},
                                             ),
+                                            dcc.Markdown("$]\\,$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Input(
+                                                id="batting-option-3-delta-sr-weight",
+                                                type="number",
+                                                value=default_batting_option_2["delta_sr"],
+                                                step=0.05,
+                                                debounce=True,
+                                                style={"width": "70px"},
+                                            ),
+                                            dcc.Markdown("$\\Delta SR^*$", mathjax=True, style={"display": "inline"}),
                                         ],
-                                        style={
-                                            "display": "flex",
-                                            "flexWrap": "wrap",
-                                            "gap": "24px",
-                                            "marginBottom": "16px",
-                                        },
+                                        style={"display": "flex", "alignItems": "center", "fontSize": "28px", "gap": "2px", "marginBottom": "8px"},
+                                    ),
+                                    dcc.Markdown(
+                                        "$$R^* = \\operatorname{norm}(R_{tot}; R_{tot,\\min}, R_{tot,\\max})$$",
+                                        mathjax=True,
+                                    ),
+                                    dcc.Markdown(
+                                        "$$\\Delta SR^* = \\operatorname{norm}(\\max(0, SR_{tot} - TourSR); \\Delta SR_{\\min}, \\Delta SR_{\\max})$$",
+                                        mathjax=True,
+                                    ),
+                                    html.Div(
+                                        [
+                                            dcc.Markdown("$V_{bowl}=$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Input(
+                                                id="bowling-option-2-wickets-weight",
+                                                type="number",
+                                                value=default_bowling_option_2["wickets"],
+                                                step=0.05,
+                                                debounce=True,
+                                                style={"width": "70px"},
+                                            ),
+                                            dcc.Markdown("$W^* + \\mathbf{1}[LB_{tot} \\ge$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Input(
+                                                id="bowling-option-2-minimum-balls",
+                                                type="number",
+                                                value=default_bowling_option_2_minimum_balls,
+                                                step=1,
+                                                min=0,
+                                                debounce=True,
+                                                style={"width": "60px"},
+                                            ),
+                                            dcc.Markdown("$]\\,$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Input(
+                                                id="bowling-option-2-economy-weight",
+                                                type="number",
+                                                value=default_bowling_option_2["economy"],
+                                                step=0.05,
+                                                debounce=True,
+                                                style={"width": "70px"},
+                                            ),
+                                            dcc.Markdown("$ECO^*_{inv}$", mathjax=True, style={"display": "inline"}),
+                                        ],
+                                        style={"display": "flex", "alignItems": "center", "fontSize": "28px", "gap": "2px", "marginBottom": "8px"},
+                                    ),
+                                    dcc.Markdown(
+                                        "$$W^* = \\operatorname{norm}(W_{tot}; W_{tot,\\min}, W_{tot,\\max})$$",
+                                        mathjax=True,
+                                    ),
+                                    dcc.Markdown(
+                                        "$$ECO^*_{inv} = 1 - \\operatorname{norm}(ECO_{tot}; ECO_{tot,\\min}, ECO_{tot,\\max})$$",
+                                        mathjax=True,
+                                    ),
+                                    dcc.Markdown(
+                                        "Here $TourSR$ is the tournament-wide strike rate, $LB$ means legal balls, "
+                                        "and all totals are computed over the whole tournament.",
+                                        mathjax=True,
                                     ),
                                     html.Div(
                                         [
