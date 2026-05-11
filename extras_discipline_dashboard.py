@@ -23,8 +23,8 @@ DROP_RE = re.compile(r"dropped by\s+(?P<fielder>[^,#]+)", re.IGNORECASE)
 NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(?P<payload>.+?)</script>'
 )
-APP_VERSION = "0.6.0"
-LAST_UPDATED = "2026-05-11 19:30 IST"
+APP_VERSION = "0.6.1"
+LAST_UPDATED = "2026-05-11 19:45 IST"
 VERSION_LOG_HREF = "/assets/version_log.md"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -2178,7 +2178,7 @@ def build_app(
 ) -> dash.Dash:
     app = dash.Dash(__name__)
     default_batting_option_2 = {"runs": 0.75, "delta_sr": 0.25}
-    default_bowling_option_2 = {"wickets": 0.5, "economy": 0.2, "bowling_sr": 0.15, "bowling_avg": 0.15}
+    default_bowling_option_2 = {"wickets": 0.6, "economy": 0.2, "bowling_sr": 0.2, "bowling_avg": 0}
     default_batting_option_2_minimum_balls = 20
     default_bowling_option_2_minimum_balls = 30
     match_options = [{"label": "All matches", "value": "ALL"}]
@@ -2523,6 +2523,11 @@ def build_app(
                                                     {"name": "w_avg AVG*_inv", "id": "bowling_avg_component"},
                                                     {"name": "V_bowl", "id": "bowling_option_2"},
                                                     {"name": "V", "id": "average_score"},
+                                                ],
+                                                style_cell_conditional=[
+                                                    {"if": {"column_id": "batting_option_2"}, "fontWeight": "bold", "backgroundColor": "#e8f5e9", "color": "#1b5e20"},
+                                                    {"if": {"column_id": "bowling_option_2"}, "fontWeight": "bold", "backgroundColor": "#e3f2fd", "color": "#0d47a1"},
+                                                    {"if": {"column_id": "average_score"}, "fontWeight": "bold", "backgroundColor": "#fff3e0", "color": "#bf360c"},
                                                 ],
                                                 data=all_rounder_scores.round(3).to_dict("records"),
                                                 style_table={"overflowX": "auto"},
@@ -2893,6 +2898,11 @@ def build_app(
                     {"name": "w_avg AVG*_inv", "id": "bowling_avg_component"},
                     {"name": "V_bowl", "id": "bowling_option_2"},
                     {"name": "V", "id": "average_score"},
+                ],
+                style_cell_conditional=[
+                    {"if": {"column_id": "batting_option_2"}, "fontWeight": "bold", "backgroundColor": "#e8f5e9", "color": "#1b5e20"},
+                    {"if": {"column_id": "bowling_option_2"}, "fontWeight": "bold", "backgroundColor": "#e3f2fd", "color": "#0d47a1"},
+                    {"if": {"column_id": "average_score"}, "fontWeight": "bold", "backgroundColor": "#fff3e0", "color": "#bf360c"},
                 ],
                 data=score_table_df.round(3).to_dict("records"),
                 style_table={"overflowX": "auto"},

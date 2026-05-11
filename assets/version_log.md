@@ -1,5 +1,11 @@
 # Version Log
 
+## 0.6.1 - 2026-05-11
+
+- Synced configurable scoring workbook with MVP tab: added bowling SR and AVG columns/formulas across all sheets.
+- Updated default bowling weights to 0.6 (wickets), 0.2 (economy), 0.2 (SR), 0 (average) in both the dashboard and workbook CLI.
+- Added column highlighting for V_bat (green), V_bowl (blue), and V (orange) in the MVP tab table via `style_cell_conditional`.
+
 ## 0.6.0 - 2026-05-11
 
 - Added bowling strike rate (BSR) and bowling average (BA) to MVP scoring with configurable weight inputs.

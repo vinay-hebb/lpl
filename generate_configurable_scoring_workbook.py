@@ -33,8 +33,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batting-runs-weight", type=float, default=0.75)
     parser.add_argument("--batting-delta-sr-weight", type=float, default=0.25)
     parser.add_argument("--batting-min-balls", type=int, default=20)
-    parser.add_argument("--bowling-wickets-weight", type=float, default=0.7)
-    parser.add_argument("--bowling-economy-weight", type=float, default=0.3)
+    parser.add_argument("--bowling-wickets-weight", type=float, default=0.6)
+    parser.add_argument("--bowling-economy-weight", type=float, default=0.2)
+    parser.add_argument("--bowling-sr-weight", type=float, default=0.2)
+    parser.add_argument("--bowling-avg-weight", type=float, default=0)
     parser.add_argument("--bowling-min-balls", type=int, default=30)
     return parser.parse_args()
 
@@ -47,6 +49,8 @@ def export_configurable_scoring_workbook(
     default_bowling_option_2: dict[str, float],
     default_minimum_balls_faced: int = 20,
     default_minimum_balls_bowled: int = 30,
+    default_bowling_sr_weight: float = 0.2,
+    default_bowling_avg_weight: float = 0,
 ) -> Path:
     batting_df = build_scorecard_batting_innings_stats(scorecards_dir).copy()
     bowling_df = build_scorecard_bowling_innings_stats(scorecards_dir).copy()
@@ -62,17 +66,19 @@ def export_configurable_scoring_workbook(
         ("Batting option 2 total minimum balls faced", default_minimum_balls_faced),
         ("Bowling option 2 wickets weight", default_bowling_option_2["wickets"]),
         ("Bowling option 2 economy weight", default_bowling_option_2["economy"]),
+        ("Bowling option 2 SR weight", default_bowling_sr_weight),
+        ("Bowling option 2 average weight", default_bowling_avg_weight),
         ("Bowling option 2 total minimum balls bowled", default_minimum_balls_bowled),
     ]
     for row_index, (label, value) in enumerate(input_rows, start=2):
         inputs_ws[f"A{row_index}"] = label
         inputs_ws[f"B{row_index}"] = value
-    inputs_ws["A8"] = "Batting option 2 equation"
-    inputs_ws["A8"].font = Font(bold=True)
-    inputs_ws["A9"] = r"$$V_{bat,2} = w_r R^* + \mathbf{1}[B_{tot} \ge B_{\min}] w_{sr} \Delta SR^*$$"
-    inputs_ws["A11"] = "Bowling option 2 equation"
-    inputs_ws["A11"].font = Font(bold=True)
-    inputs_ws["A12"] = r"$$V_{bowl,2} = w_w W^* + \mathbf{1}[LB_{tot} \ge LB_{\min}] w_e ECO^*_{inv}$$"
+    inputs_ws["A10"] = "Batting option 2 equation"
+    inputs_ws["A10"].font = Font(bold=True)
+    inputs_ws["A11"] = r"$$V_{bat,2} = w_r R^* + \mathbf{1}[B_{tot} \ge B_{\min}] w_{sr} \Delta SR^*$$"
+    inputs_ws["A13"] = "Bowling option 2 equation"
+    inputs_ws["A13"].font = Font(bold=True)
+    inputs_ws["A14"] = r"$$V_{bowl,2} = w_w W^* + \mathbf{1}[LB_{tot} \ge LB_{\min}] (w_e ECO^*_{inv} + w_{sr} SR^*_{inv} + w_{avg} AVG^*_{inv})$$"
 
     batting_ws = workbook.create_sheet("BattingInnings")
     batting_headers = [
@@ -135,8 +141,12 @@ def export_configurable_scoring_workbook(
         "overs_bowled",
         "runs_conceded",
         "economy",
+        "bowling_strike_rate",
+        "bowling_average",
         "wickets_norm",
         "economy_inv_norm",
+        "sr_inv_norm",
+        "avg_inv_norm",
         "bowling_option_2_score",
     ]
     bowling_ws.append(bowling_headers)
@@ -158,17 +168,29 @@ def export_configurable_scoring_workbook(
     if bowling_rows_end >= bowling_rows_start:
         for row_index in range(bowling_rows_start, bowling_rows_end + 1):
             bowling_ws[f"I{row_index}"] = f'=IF(G{row_index}=0,0,H{row_index}/G{row_index})'
-            bowling_ws[f"J{row_index}"] = (
+            bowling_ws[f"J{row_index}"] = f'=IF(E{row_index}=0,0,F{row_index}/E{row_index})'
+            bowling_ws[f"K{row_index}"] = f'=IF(E{row_index}=0,0,H{row_index}/E{row_index})'
+            bowling_ws[f"L{row_index}"] = (
                 f'=IF(MAX($E${bowling_rows_start}:$E${bowling_rows_end})=MIN($E${bowling_rows_start}:$E${bowling_rows_end}),'
                 f'IF(E{row_index}>0,1,0),(E{row_index}-MIN($E${bowling_rows_start}:$E${bowling_rows_end}))/'
                 f'(MAX($E${bowling_rows_start}:$E${bowling_rows_end})-MIN($E${bowling_rows_start}:$E${bowling_rows_end})))'
             )
-            bowling_ws[f"K{row_index}"] = (
+            bowling_ws[f"M{row_index}"] = (
                 f'=IF(MAX($I${bowling_rows_start}:$I${bowling_rows_end})=MIN($I${bowling_rows_start}:$I${bowling_rows_end}),'
                 f'IF(I{row_index}>=0,1,0),1-((I{row_index}-MIN($I${bowling_rows_start}:$I${bowling_rows_end}))/'
                 f'(MAX($I${bowling_rows_start}:$I${bowling_rows_end})-MIN($I${bowling_rows_start}:$I${bowling_rows_end}))))'
             )
-            bowling_ws[f"L{row_index}"] = f'=Inputs!$B$4*J{row_index}+Inputs!$B$5*K{row_index}'
+            bowling_ws[f"N{row_index}"] = (
+                f'=IF(MAX($J${bowling_rows_start}:$J${bowling_rows_end})=MIN($J${bowling_rows_start}:$J${bowling_rows_end}),'
+                f'IF(J{row_index}>=0,1,0),1-((J{row_index}-MIN($J${bowling_rows_start}:$J${bowling_rows_end}))/'
+                f'(MAX($J${bowling_rows_start}:$J${bowling_rows_end})-MIN($J${bowling_rows_start}:$J${bowling_rows_end}))))'
+            )
+            bowling_ws[f"O{row_index}"] = (
+                f'=IF(MAX($K${bowling_rows_start}:$K${bowling_rows_end})=MIN($K${bowling_rows_start}:$K${bowling_rows_end}),'
+                f'IF(K{row_index}>=0,1,0),1-((K{row_index}-MIN($K${bowling_rows_start}:$K${bowling_rows_end}))/'
+                f'(MAX($K${bowling_rows_start}:$K${bowling_rows_end})-MIN($K${bowling_rows_start}:$K${bowling_rows_end}))))'
+            )
+            bowling_ws[f"P{row_index}"] = f'=Inputs!$B$5*L{row_index}+Inputs!$B$6*M{row_index}+Inputs!$B$7*N{row_index}+Inputs!$B$8*O{row_index}'
 
     batting_summary_ws = workbook.create_sheet("BattingSummary")
     batting_summary_headers = [
@@ -257,8 +279,14 @@ def export_configurable_scoring_workbook(
         "total_runs_conceded",
         "total_overs_bowled",
         "total_economy",
+        "total_bowling_strike_rate",
+        "total_bowling_average",
         "wickets_norm",
         "economy_inv_norm",
+        "sr_inv_norm",
+        "avg_inv_norm",
+        "bowling_sr_component",
+        "bowling_avg_component",
     ]
     bowling_summary_ws.append(bowling_summary_headers)
     bowling_players = (
@@ -289,24 +317,42 @@ def export_configurable_scoring_workbook(
             )
             bowling_summary_ws[f"L{row_index}"] = f'=J{row_index}/6'
             bowling_summary_ws[f"M{row_index}"] = f'=IF(L{row_index}=0,0,K{row_index}/L{row_index})'
-            bowling_summary_ws[f"N{row_index}"] = (
+            bowling_summary_ws[f"N{row_index}"] = f'=IF(I{row_index}=0,0,J{row_index}/I{row_index})'
+            bowling_summary_ws[f"O{row_index}"] = f'=IF(I{row_index}=0,0,K{row_index}/I{row_index})'
+            bowling_summary_ws[f"P{row_index}"] = (
                 f'=IF(MAX($I${bowling_summary_start}:$I${bowling_summary_end})=MIN($I${bowling_summary_start}:$I${bowling_summary_end}),'
                 f'IF(I{row_index}>0,1,0),(I{row_index}-MIN($I${bowling_summary_start}:$I${bowling_summary_end}))/'
                 f'(MAX($I${bowling_summary_start}:$I${bowling_summary_end})-MIN($I${bowling_summary_start}:$I${bowling_summary_end})))'
             )
-            bowling_summary_ws[f"O{row_index}"] = (
+            bowling_summary_ws[f"Q{row_index}"] = (
                 f'=IF(MAX($M${bowling_summary_start}:$M${bowling_summary_end})=MIN($M${bowling_summary_start}:$M${bowling_summary_end}),'
                 f'IF(M{row_index}>=0,1,0),1-((M{row_index}-MIN($M${bowling_summary_start}:$M${bowling_summary_end}))/'
                 f'(MAX($M${bowling_summary_start}:$M${bowling_summary_end})-MIN($M${bowling_summary_start}:$M${bowling_summary_end}))))'
             )
-            bowling_summary_ws[f"G{row_index}"] = f'=IF(J{row_index}>=Inputs!$B$7,1,0)'
+            bowling_summary_ws[f"R{row_index}"] = (
+                f'=IF(MAX($N${bowling_summary_start}:$N${bowling_summary_end})=MIN($N${bowling_summary_start}:$N${bowling_summary_end}),'
+                f'IF(N{row_index}>=0,1,0),1-((N{row_index}-MIN($N${bowling_summary_start}:$N${bowling_summary_end}))/'
+                f'(MAX($N${bowling_summary_start}:$N${bowling_summary_end})-MIN($N${bowling_summary_start}:$N${bowling_summary_end}))))'
+            )
+            bowling_summary_ws[f"S{row_index}"] = (
+                f'=IF(MAX($O${bowling_summary_start}:$O${bowling_summary_end})=MIN($O${bowling_summary_start}:$O${bowling_summary_end}),'
+                f'IF(O{row_index}>=0,1,0),1-((O{row_index}-MIN($O${bowling_summary_start}:$O${bowling_summary_end}))/'
+                f'(MAX($O${bowling_summary_start}:$O${bowling_summary_end})-MIN($O${bowling_summary_start}:$O${bowling_summary_end}))))'
+            )
+            bowling_summary_ws[f"G{row_index}"] = f'=IF(J{row_index}>=Inputs!$B$9,1,0)'
             bowling_summary_ws[f"F{row_index}"] = (
-                f'=Inputs!$B$5*N{row_index}'
+                f'=Inputs!$B$5*P{row_index}'
             )
             bowling_summary_ws[f"H{row_index}"] = (
-                f'=G{row_index}*Inputs!$B$6*O{row_index}'
+                f'=G{row_index}*Inputs!$B$6*Q{row_index}'
             )
-            bowling_summary_ws[f"D{row_index}"] = f'=F{row_index}+H{row_index}'
+            bowling_summary_ws[f"T{row_index}"] = (
+                f'=G{row_index}*Inputs!$B$7*R{row_index}'
+            )
+            bowling_summary_ws[f"U{row_index}"] = (
+                f'=G{row_index}*Inputs!$B$8*S{row_index}'
+            )
+            bowling_summary_ws[f"D{row_index}"] = f'=F{row_index}+H{row_index}+T{row_index}+U{row_index}'
             bowling_summary_ws[f"E{row_index}"] = f'=D{row_index}'
 
     combined_ws = workbook.create_sheet("CombinedScores")
@@ -320,6 +366,8 @@ def export_configurable_scoring_workbook(
         "bowling_wickets_component",
         "bowling_total_balls_gate",
         "bowling_economy_component",
+        "bowling_sr_component",
+        "bowling_avg_component",
         "bowling_option_2",
         "average_score",
         "rank",
@@ -370,12 +418,20 @@ def export_configurable_scoring_workbook(
                 f'BowlingSummary!$B$2:$B${bowling_summary_range_end},B{row_index})'
             )
             combined_ws[f"J{row_index}"] = (
+                f'=SUMIFS(BowlingSummary!$T$2:$T${bowling_summary_range_end},BowlingSummary!$A$2:$A${bowling_summary_range_end},A{row_index},'
+                f'BowlingSummary!$B$2:$B${bowling_summary_range_end},B{row_index})'
+            )
+            combined_ws[f"K{row_index}"] = (
+                f'=SUMIFS(BowlingSummary!$U$2:$U${bowling_summary_range_end},BowlingSummary!$A$2:$A${bowling_summary_range_end},A{row_index},'
+                f'BowlingSummary!$B$2:$B${bowling_summary_range_end},B{row_index})'
+            )
+            combined_ws[f"L{row_index}"] = (
                 f'=SUMIFS(BowlingSummary!$E$2:$E${bowling_summary_range_end},BowlingSummary!$A$2:$A${bowling_summary_range_end},A{row_index},'
                 f'BowlingSummary!$B$2:$B${bowling_summary_range_end},B{row_index})'
             )
-            combined_ws[f"K{row_index}"] = f'=(F{row_index}+J{row_index})/2'
-            combined_ws[f"L{row_index}"] = (
-                f'=RANK(K{row_index},$K${combined_start}:$K${combined_end},0)+COUNTIF($K${combined_start}:K{row_index},K{row_index})-1'
+            combined_ws[f"M{row_index}"] = f'=(F{row_index}+L{row_index})/2'
+            combined_ws[f"N{row_index}"] = (
+                f'=RANK(M{row_index},$M${combined_start}:$M${combined_end},0)+COUNTIF($M${combined_start}:M{row_index},M{row_index})-1'
             )
 
     top5_ws = workbook.create_sheet("Top5")
@@ -390,6 +446,8 @@ def export_configurable_scoring_workbook(
         "bowling_wickets_component",
         "bowling_total_balls_gate",
         "bowling_economy_component",
+        "bowling_sr_component",
+        "bowling_avg_component",
         "bowling_option_2",
         "average_score",
     ]
@@ -399,19 +457,19 @@ def export_configurable_scoring_workbook(
             row_index = rank_value + 1
             top5_ws[f"A{row_index}"] = rank_value
             for column_letter, combined_column in zip(
-                ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"],
-                ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"],
+                ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"],
+                ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M"],
                 strict=True,
             ):
                 top5_ws[f"{column_letter}{row_index}"] = (
                     f'=IFERROR(INDEX(CombinedScores!${combined_column}$2:${combined_column}${combined_end},'
-                    f'MATCH(A{row_index},CombinedScores!$L$2:$L${combined_end},0)),0)'
+                    f'MATCH(A{row_index},CombinedScores!$N$2:$N${combined_end},0)),0)'
                 )
             top5_ws[f"B{row_index}"] = (
-                f'=IFERROR(INDEX(CombinedScores!$A$2:$A${combined_end},MATCH(A{row_index},CombinedScores!$L$2:$L${combined_end},0)),"")'
+                f'=IFERROR(INDEX(CombinedScores!$A$2:$A${combined_end},MATCH(A{row_index},CombinedScores!$N$2:$N${combined_end},0)),"")'
             )
             top5_ws[f"C{row_index}"] = (
-                f'=IFERROR(INDEX(CombinedScores!$B$2:$B${combined_end},MATCH(A{row_index},CombinedScores!$L$2:$L${combined_end},0)),"")'
+                f'=IFERROR(INDEX(CombinedScores!$B$2:$B${combined_end},MATCH(A{row_index},CombinedScores!$N$2:$N${combined_end},0)),"")'
             )
 
     for worksheet in workbook.worksheets:
@@ -441,6 +499,8 @@ def main() -> int:
         },
         default_minimum_balls_faced=args.batting_min_balls,
         default_minimum_balls_bowled=args.bowling_min_balls,
+        default_bowling_sr_weight=args.bowling_sr_weight,
+        default_bowling_avg_weight=args.bowling_avg_weight,
     )
     print(f"{args.output}")
     return 0
