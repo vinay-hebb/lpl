@@ -1,5 +1,13 @@
 # Version Log
 
+## 0.6.0 - 2026-05-11
+
+- Added bowling strike rate (BSR) and bowling average (BA) to MVP scoring with configurable weight inputs.
+- Restructured MVP equations layout: R*/ΔSR* formulas above V_bat, W*/ECO*/SR*/AVG* formulas above V_bowl.
+- Fixed MathJax inline math rendering in tab content by removing trailing whitespace before closing `$` delimiters.
+- Added `assets/custom.css` to fix inline equation markdown `<p>`-tag flex layout.
+- Hardcoded Dash port to 8052.
+
 ## 0.5.0 - 2026-05-05
 
 - Added the most recent match data and commentary.
