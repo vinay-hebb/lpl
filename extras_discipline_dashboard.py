@@ -1484,6 +1484,8 @@ def compute_scorecard_all_rounder_score_table(
     batting_minimum_balls_faced: int = 0,
     bowling_wickets_weight: float,
     bowling_economy_weight: float,
+    bowling_strike_rate_weight: float,
+    bowling_average_weight: float,
     bowling_minimum_balls_bowled: int = 30,
 ) -> pd.DataFrame:
     batting_df_all = build_scorecard_batting_innings_stats(scorecards_dir)
@@ -1511,6 +1513,8 @@ def compute_scorecard_all_rounder_score_table(
             "bowling_wickets_component",
             "bowling_total_balls_gate",
             "bowling_economy_component",
+            "bowling_sr_component",
+            "bowling_avg_component",
             "bowling_option_2",
         ]
     )
@@ -1595,6 +1599,24 @@ def compute_scorecard_all_rounder_score_table(
         bowling_summary["economy_inv_norm"] = inverse_normalize_series(
             bowling_summary["total_economy"]
         )
+        bowling_summary["total_bowling_strike_rate"] = bowling_summary.apply(
+            lambda row: row["total_legal_balls"] / row["total_wickets"]
+            if row["total_wickets"] > 0
+            else 0.0,
+            axis=1,
+        )
+        bowling_summary["total_bowling_average"] = bowling_summary.apply(
+            lambda row: row["total_runs_conceded"] / row["total_wickets"]
+            if row["total_wickets"] > 0
+            else 0.0,
+            axis=1,
+        )
+        bowling_summary["sr_inv_norm"] = inverse_normalize_series(
+            bowling_summary["total_bowling_strike_rate"]
+        )
+        bowling_summary["avg_inv_norm"] = inverse_normalize_series(
+            bowling_summary["total_bowling_average"]
+        )
         bowling_summary["bowling_wickets_component"] = (
             bowling_wickets_weight * bowling_summary["wickets_norm"]
         )
@@ -1607,8 +1629,21 @@ def compute_scorecard_all_rounder_score_table(
             * bowling_economy_weight
             * bowling_summary["economy_inv_norm"]
         )
+        bowling_summary["bowling_sr_component"] = (
+            bowling_summary["bowling_total_balls_gate"]
+            * bowling_strike_rate_weight
+            * bowling_summary["sr_inv_norm"]
+        )
+        bowling_summary["bowling_avg_component"] = (
+            bowling_summary["bowling_total_balls_gate"]
+            * bowling_average_weight
+            * bowling_summary["avg_inv_norm"]
+        )
         bowling_summary["bowling_option_2"] = (
-            bowling_summary["bowling_wickets_component"] + bowling_summary["bowling_economy_component"]
+            bowling_summary["bowling_wickets_component"]
+            + bowling_summary["bowling_economy_component"]
+            + bowling_summary["bowling_sr_component"]
+            + bowling_summary["bowling_avg_component"]
         )
         bowling_summary = bowling_summary.rename(columns={"bowling_team": "team", "bowler": "player"})
         bowling_summary = bowling_summary.drop(
@@ -1620,6 +1655,10 @@ def compute_scorecard_all_rounder_score_table(
                 "total_economy",
                 "wickets_norm",
                 "economy_inv_norm",
+                "total_bowling_strike_rate",
+                "total_bowling_average",
+                "sr_inv_norm",
+                "avg_inv_norm",
             ]
         )
 
@@ -1649,6 +1688,8 @@ def compute_scorecard_all_rounder_score_table(
         "bowling_wickets_component",
         "bowling_total_balls_gate",
         "bowling_economy_component",
+        "bowling_sr_component",
+        "bowling_avg_component",
         "bowling_option_2",
     ]:
         merged_df[column] = pd.to_numeric(merged_df[column], errors="coerce").fillna(0.0)
@@ -1656,16 +1697,18 @@ def compute_scorecard_all_rounder_score_table(
     ordered_columns = [
         "team",
         "player",
-        "batting_runs_component",
-        "batting_delta_sr_component",
-        "batting_total_balls_gate",
-        "batting_option_2",
-        "bowling_wickets_component",
-        "bowling_total_balls_gate",
-        "bowling_economy_component",
-        "bowling_option_2",
-        "average_score",
-    ]
+                    "batting_runs_component",
+                    "batting_delta_sr_component",
+                    "batting_total_balls_gate",
+                    "batting_option_2",
+                    "bowling_wickets_component",
+                    "bowling_total_balls_gate",
+                    "bowling_economy_component",
+                    "bowling_sr_component",
+                    "bowling_avg_component",
+                    "bowling_option_2",
+                    "average_score",
+                    ]
     return (
         merged_df[ordered_columns]
         .sort_values(["average_score", "batting_option_2", "bowling_option_2", "player"], ascending=[False, False, False, True])
@@ -2135,7 +2178,7 @@ def build_app(
 ) -> dash.Dash:
     app = dash.Dash(__name__)
     default_batting_option_2 = {"runs": 0.75, "delta_sr": 0.25}
-    default_bowling_option_2 = {"wickets": 0.7, "economy": 0.3}
+    default_bowling_option_2 = {"wickets": 0.5, "economy": 0.2, "bowling_sr": 0.15, "bowling_avg": 0.15}
     default_batting_option_2_minimum_balls = 20
     default_bowling_option_2_minimum_balls = 30
     match_options = [{"label": "All matches", "value": "ALL"}]
@@ -2163,6 +2206,8 @@ def build_app(
             batting_minimum_balls_faced=default_batting_option_2_minimum_balls,
             bowling_wickets_weight=default_bowling_option_2["wickets"],
             bowling_economy_weight=default_bowling_option_2["economy"],
+            bowling_strike_rate_weight=default_bowling_option_2["bowling_sr"],
+            bowling_average_weight=default_bowling_option_2["bowling_avg"],
             bowling_minimum_balls_bowled=default_bowling_option_2_minimum_balls,
         )
         if scorecards_dir is not None
@@ -2177,6 +2222,8 @@ def build_app(
                 "bowling_wickets_component",
                 "bowling_total_balls_gate",
                 "bowling_economy_component",
+                "bowling_sr_component",
+                "bowling_avg_component",
                 "bowling_option_2",
                 "average_score",
             ]
@@ -2342,6 +2389,14 @@ def build_app(
                                         "$$\\operatorname{norm}(x; x_{\\min}, x_{\\max}) = \\frac{x - x_{\\min}}{x_{\\max} - x_{\\min}}$$",
                                         mathjax=True,
                                     ),
+                                    dcc.Markdown(
+                                        "$$R^* = \\operatorname{norm}(R_{tot}; R_{tot,\\min}, R_{tot,\\max})$$",
+                                        mathjax=True,
+                                    ),
+                                    dcc.Markdown(
+                                        "$$\\Delta SR^* = \\operatorname{norm}(\\max(0, SR_{tot} - TourSR); \\Delta SR_{\\min}, \\Delta SR_{\\max})$$",
+                                        mathjax=True,
+                                    ),
                                     html.Div(
                                         [
                                             dcc.Markdown("$V_{bat}=$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
@@ -2377,11 +2432,19 @@ def build_app(
                                         style={"display": "flex", "alignItems": "center", "fontSize": "28px", "gap": "2px", "marginBottom": "8px"},
                                     ),
                                     dcc.Markdown(
-                                        "$$R^* = \\operatorname{norm}(R_{tot}; R_{tot,\\min}, R_{tot,\\max})$$",
+                                        "$$W^* = \\operatorname{norm}(W_{tot}; W_{tot,\\min}, W_{tot,\\max})$$",
                                         mathjax=True,
                                     ),
                                     dcc.Markdown(
-                                        "$$\\Delta SR^* = \\operatorname{norm}(\\max(0, SR_{tot} - TourSR); \\Delta SR_{\\min}, \\Delta SR_{\\max})$$",
+                                        "$$ECO^*_{inv} = 1 - \\operatorname{norm}(ECO_{tot}; ECO_{tot,\\min}, ECO_{tot,\\max})$$",
+                                        mathjax=True,
+                                    ),
+                                    dcc.Markdown(
+                                        "$$SR^*_{inv} = 1 - \\operatorname{norm}(BSR_{tot}; BSR_{tot,\\min}, BSR_{tot,\\max})$$",
+                                        mathjax=True,
+                                    ),
+                                    dcc.Markdown(
+                                        "$$AVG^*_{inv} = 1 - \\operatorname{norm}(BA_{tot}; BA_{tot,\\min}, BA_{tot,\\max})$$",
                                         mathjax=True,
                                     ),
                                     html.Div(
@@ -2405,7 +2468,7 @@ def build_app(
                                                 debounce=True,
                                                 style={"width": "60px"},
                                             ),
-                                            dcc.Markdown("$]\\,$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Markdown("$]\\,(\\,$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
                                             dcc.Input(
                                                 id="bowling-option-2-economy-weight",
                                                 type="number",
@@ -2414,20 +2477,30 @@ def build_app(
                                                 debounce=True,
                                                 style={"width": "70px"},
                                             ),
-                                            dcc.Markdown("$ECO^*_{inv}$", mathjax=True, style={"display": "inline"}),
+                                            dcc.Markdown("$ECO^*_{inv}+$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Input(
+                                                id="bowling-option-2-sr-weight",
+                                                type="number",
+                                                value=default_bowling_option_2["bowling_sr"],
+                                                step=0.05,
+                                                debounce=True,
+                                                style={"width": "70px"},
+                                            ),
+                                            dcc.Markdown("$SR^*_{inv}+$", mathjax=True, style={"display": "inline", "marginRight": "4px"}),
+                                            dcc.Input(
+                                                id="bowling-option-2-avg-weight",
+                                                type="number",
+                                                value=default_bowling_option_2["bowling_avg"],
+                                                step=0.05,
+                                                debounce=True,
+                                                style={"width": "70px"},
+                                            ),
+                                            dcc.Markdown("$AVG^*_{inv})$", mathjax=True, style={"display": "inline"}),
                                         ],
                                         style={"display": "flex", "alignItems": "center", "fontSize": "28px", "gap": "2px", "marginBottom": "8px"},
                                     ),
                                     dcc.Markdown(
-                                        "$$W^* = \\operatorname{norm}(W_{tot}; W_{tot,\\min}, W_{tot,\\max})$$",
-                                        mathjax=True,
-                                    ),
-                                    dcc.Markdown(
-                                        "$$ECO^*_{inv} = 1 - \\operatorname{norm}(ECO_{tot}; ECO_{tot,\\min}, ECO_{tot,\\max})$$",
-                                        mathjax=True,
-                                    ),
-                                    dcc.Markdown(
-                                        "Here $TourSR$ is the tournament-wide strike rate, $LB$ means legal balls, "
+                                        "Here $TourSR$ is the tournament-wide batting strike rate, $LB$ means legal balls, "
                                         "and all totals are computed over the whole tournament.",
                                         mathjax=True,
                                     ),
@@ -2446,6 +2519,8 @@ def build_app(
                                                     {"name": "w_w W*", "id": "bowling_wickets_component"},
                                                     {"name": "1[LB_tot≥LB_min]", "id": "bowling_total_balls_gate"},
                                                     {"name": "w_e ECO*_inv", "id": "bowling_economy_component"},
+                                                    {"name": "w_sr SR*_inv", "id": "bowling_sr_component"},
+                                                    {"name": "w_avg AVG*_inv", "id": "bowling_avg_component"},
                                                     {"name": "V_bowl", "id": "bowling_option_2"},
                                                     {"name": "V", "id": "average_score"},
                                                 ],
@@ -2753,6 +2828,8 @@ def build_app(
         Input("batting-option-3-minimum-balls", "value"),
         Input("bowling-option-2-wickets-weight", "value"),
         Input("bowling-option-2-economy-weight", "value"),
+        Input("bowling-option-2-sr-weight", "value"),
+        Input("bowling-option-2-avg-weight", "value"),
         Input("bowling-option-2-minimum-balls", "value"),
     )
     def update_option_score_table(
@@ -2762,6 +2839,8 @@ def build_app(
         batting_option_3_minimum_balls: float | None,
         bowling_option_2_wickets_weight: float | None,
         bowling_option_2_economy_weight: float | None,
+        bowling_option_2_sr_weight: float | None,
+        bowling_option_2_avg_weight: float | None,
         bowling_option_2_minimum_balls: float | None,
     ) -> list[html.Component]:
         score_table_df = (
@@ -2773,6 +2852,8 @@ def build_app(
                 batting_minimum_balls_faced=max(0, int(batting_option_3_minimum_balls or 0)),
                 bowling_wickets_weight=float(bowling_option_2_wickets_weight or 0.0),
                 bowling_economy_weight=float(bowling_option_2_economy_weight or 0.0),
+                bowling_strike_rate_weight=float(bowling_option_2_sr_weight or 0.0),
+                bowling_average_weight=float(bowling_option_2_avg_weight or 0.0),
                 bowling_minimum_balls_bowled=max(0, int(bowling_option_2_minimum_balls or 0)),
             )
             if scorecards_dir is not None
@@ -2784,11 +2865,13 @@ def build_app(
                     "batting_delta_sr_component",
                     "batting_total_balls_gate",
                     "batting_option_2",
-                    "bowling_wickets_component",
-                    "bowling_total_balls_gate",
-                    "bowling_economy_component",
-                    "bowling_option_2",
-                    "average_score",
+                "bowling_wickets_component",
+                "bowling_total_balls_gate",
+                "bowling_economy_component",
+                "bowling_sr_component",
+                "bowling_avg_component",
+                "bowling_option_2",
+                "average_score",
                 ]
             )
         )
@@ -2806,6 +2889,8 @@ def build_app(
                     {"name": "w_w W*", "id": "bowling_wickets_component"},
                     {"name": "1[LB_tot≥LB_min]", "id": "bowling_total_balls_gate"},
                     {"name": "w_e ECO*_inv", "id": "bowling_economy_component"},
+                    {"name": "w_sr SR*_inv", "id": "bowling_sr_component"},
+                    {"name": "w_avg AVG*_inv", "id": "bowling_avg_component"},
                     {"name": "V_bowl", "id": "bowling_option_2"},
                     {"name": "V", "id": "average_score"},
                 ],
@@ -2836,7 +2921,7 @@ def main() -> int:
     app = create_dash_app(args.input_dir, args.points_table, args.figure_config)
     app.run(
         host=args.host,
-        port=args.port,
+        port=8052,
         debug=not args.no_reload,
         dev_tools_hot_reload=not args.no_reload,
     )

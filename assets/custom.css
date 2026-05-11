@@ -1,0 +1,10 @@
+/* Fix inline math rendering in equation lines */
+.eq-line p {
+    display: inline !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.eq-line .dash-markdown {
+    display: inline !important;
+}
