@@ -1,5 +1,11 @@
 # Version Log
 
+## 0.6.2 - 2026-05-14
+
+- Added final match (Akatsuki Corps vs Illuminati, match #24711201) data from CricHeroes.
+- Updated tournament points table with post-final standings.
+- Refreshed past matches listing with complete 13-match tournament data.
+
 ## 0.6.1 - 2026-05-11
 
 - Synced configurable scoring workbook with MVP tab: added bowling SR and AVG columns/formulas across all sheets.

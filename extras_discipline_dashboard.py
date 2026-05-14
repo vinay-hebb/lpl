@@ -23,7 +23,7 @@ DROP_RE = re.compile(r"dropped by\s+(?P<fielder>[^,#]+)", re.IGNORECASE)
 NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(?P<payload>.+?)</script>'
 )
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.6.2"
 LAST_UPDATED = "2026-05-11 19:45 IST"
 VERSION_LOG_HREF = "/assets/version_log.md"
 def parse_args() -> argparse.Namespace:
